@@ -281,7 +281,7 @@ for (const s of [-1, 1]) {
   addBox(0.7, 0.6, 0.7, s * 5.4, 0.8, -13.2, 0x8a6b45);
 }
 // Desk: wooden top on four legs, with an inset lightbox panel (the compositing surface)
-const DESK = { x: 0, z: -12.4, w: 2.4, d: 1.1, h: 0.78 };
+const DESK = { x: 0, z: -12.2, w: 2.4, d: 1.1, h: 0.78 };
 addBox(DESK.w, 0.06, DESK.d, DESK.x, DESK.h - 0.06, DESK.z, COLORS.wood, { collide: true });
 for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
   addBox(0.07, DESK.h - 0.06, 0.07, DESK.x + sx * (DESK.w / 2 - 0.08), 0, DESK.z + sz * (DESK.d / 2 - 0.08), shade(COLORS.wood, 0.8));
