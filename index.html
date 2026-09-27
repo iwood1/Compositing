@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room 467 — Vertical Slice</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1e1d1b; font-family: system-ui, sans-serif; }
+  canvas { display: block; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+             background: rgba(20, 19, 17, 0.72); color: #e8e2d6; cursor: pointer; user-select: none; text-align: center; }
+  #overlay h1 { font-weight: 400; letter-spacing: 0.12em; margin: 0 0 0.8em; }
+  #overlay p { margin: 0.3em 0; opacity: 0.85; }
+  #overlay.hidden { display: none; }
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+               border-radius: 50%; background: rgba(255, 255, 255, 0.7); pointer-events: none; }
+  #hud { position: fixed; left: 10px; bottom: 8px; color: rgba(255, 255, 255, 0.45); font: 12px monospace; pointer-events: none; }
+  #devlog { position: fixed; top: 8px; right: 8px; width: min(520px, 90vw); max-height: 90vh; overflow: hidden; margin: 0;
+            padding: 8px 10px; background: rgba(0, 0, 0, 0.72); color: #cfe8cf; font: 11px/1.4 monospace;
+            white-space: pre-wrap; word-break: break-all; pointer-events: none; z-index: 10; display: none; }
+  #devlog.open { display: block; }
+</style>
+</head>
+<body>
+<div id="overlay">
+  <h1>ROOM 467</h1>
+  <p><b>Click</b> to walk</p>
+  <p>WASD / arrows: move &nbsp;·&nbsp; Mouse: look &nbsp;·&nbsp; Esc: release cursor &nbsp;·&nbsp; ` : debug overlay</p>
+</div>
+<div id="crosshair"></div>
+<div id="hud"></div>
+<pre id="devlog"></pre>
+
+<script>
+// =====================================================================
+// 0. DEV LOG & FLAGS — shared, in-memory, used by every later system
+// =====================================================================
+// Loaded before Three.js so it works (and records the failure) even if the
+// CDN load fails. Everything here is global on purpose: poke it from the
+// console as DevLog.events / DevLog.flags.
+//   logEvent(category, message, data?)  timestamped, stored, echoed to console
+//   setFlag(name, value) / getFlag(name, fallback?) / incFlag(name, by?)
+// Press ` (backquote / ~ key) to toggle the on-screen overlay.
+const DevLog = {
+  events: [],        // every event this session, oldest first (never trimmed)
+  flags: {},         // discrete state: booleans, counters, strings
+  t0: performance.now(),
+  visible: false,
+  dirty: true,       // overlay needs a redraw
+  MAX_SHOWN: 15,
+};
+
+function logEvent(category, message, data) {
+  const e = { t: (performance.now() - DevLog.t0) / 1000, time: new Date().toISOString(), category, message, data };
+  DevLog.events.push(e);
+  DevLog.dirty = true;
+  const print = /error|warn/i.test(category) ? console.warn : console.log;
+  print(`[${e.t.toFixed(2)}s] [${category}] ${message}`, ...(data === undefined ? [] : [data]));
+  return e;
+}
+function setFlag(name, value) {
+  const prev = DevLog.flags[name];
+  DevLog.flags[name] = value;
+  if (prev !== value) DevLog.dirty = true;
+  return prev;
+}
+function getFlag(name, fallback) {
+  return name in DevLog.flags ? DevLog.flags[name] : fallback;
+}
+function incFlag(name, by = 1) {   // convenience for counters (e.g. resonance tallies)
+  return setFlag(name, getFlag(name, 0) + by);
+}
+
+// Overlay: redrawn at most ~10x/s, and only while open and something changed
+function renderDevLog() {
+  if (!DevLog.visible || !DevLog.dirty) return;
+  DevLog.dirty = false;
+  const fmt = (v) => (typeof v === 'string' ? v : JSON.stringify(v));
+  const flagLines = Object.keys(DevLog.flags).sort().map((k) => `  ${k} = ${fmt(DevLog.flags[k])}`);
+  const eventLines = DevLog.events.slice(-DevLog.MAX_SHOWN).map((e) =>
+    `  ${e.t.toFixed(2).padStart(7)}s  [${e.category}] ${e.message}${e.data === undefined ? '' : '  ' + fmt(e.data)}`);
+  document.getElementById('devlog').textContent =
+    `FLAGS (${flagLines.length})\n${flagLines.join('\n') || '  (none)'}\n\n` +
+    `EVENTS (last ${eventLines.length} of ${DevLog.events.length})\n${eventLines.join('\n') || '  (none)'}`;
+}
+setInterval(renderDevLog, 100);
+
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Backquote') return;
+  DevLog.visible = !DevLog.visible;
+  DevLog.dirty = true;
+  document.getElementById('devlog').classList.toggle('open', DevLog.visible);
+  renderDevLog();
+});
+
+// Anything that throws later (including in the render loop) lands in the log
+window.addEventListener('error', (e) => logEvent('error', e.message, { src: e.filename, line: e.lineno }));
+window.addEventListener('unhandledrejection', (e) => logEvent('error', 'unhandled rejection', String(e.reason)));
+logEvent('system', 'dev log ready');
+</script>
+
+<!-- Three.js r128, pinned UMD build (exposes global THREE). See DESIGN.md §9. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
+        integrity="sha512-dLxUelApnYxpLt6K2iomGngnHO83iUvZytA3YjDUCjT0HDOHKXnVYdf3hU4JjM8uEhxf9nD1/ey98U3t2vZ0qQ=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+// =====================================================================
+// 1. CONFIG — tuning knobs for "does walking feel right?"
+// =====================================================================
+const CONFIG = {
+  eyeHeight: 1.6,          // metres
+  playerRadius: 0.3,       // collision radius in the XZ plane
+  walkSpeed: 3.0,          // m/s
+  accel: 12,               // how fast velocity eases toward target (higher = snappier)
+  mouseSensitivity: 0.0022,
+  spawn: { x: 0, z: 12.8, yaw: 0 },   // yaw 0 = facing north (-Z), toward the desk
+};
+
+// Layout, in metres. North (-Z) = desk end, south (+Z) = entrance.
+//   z -14..-10  desk area        z -9..-4  stall row B
+//   z  -4.. 2   fountain plaza   z  2.. 7  stall row A
+//   z   7..14   entrance hall (pillar)
+const HALL = { halfW: 7, halfL: 14, height: 4.2 };
+const WALKWAY_HALF_W = 2.5;
+const COLORS = {
+  floor: 0x7d776c, walkway: 0x9c9483, wall: 0xc9c2b6, ceiling: 0x5e5a53,
+  stallWall: 0xd8d1c4, shelf: 0x5a3f2a, stone: 0xa7a296, water: 0x3fa7c4, wood: 0x6b4a2f,
+};
+
+if (!window.THREE) {
+  logEvent('error', 'Three.js failed to load');
+  document.getElementById('overlay').innerHTML = '<p>Three.js failed to load (offline or CDN blocked).</p>';
+  throw new Error('THREE not loaded');
+}
+
+// =====================================================================
+// 2. RENDERER / SCENE / CAMERA
+// =====================================================================
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1e1d1b);
+scene.fog = new THREE.Fog(0x1e1d1b, 16, 48);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 100);
+camera.rotation.order = 'YXZ';   // yaw, then pitch: standard FPS ordering
+
+// =====================================================================
+// 3. LIGHTING — soft ambient fill + one shadow-casting directional
+// =====================================================================
+scene.add(new THREE.AmbientLight(0xfff4e6, 0.55));
+const sun = new THREE.DirectionalLight(0xfff0dc, 0.6);
+sun.position.set(6, 20, 8);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -18, right: 18, top: 18, bottom: -18, near: 1, far: 50 });
+sun.shadow.camera.updateProjectionMatrix();
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+
+// =====================================================================
+// 4. BUILD HELPERS — meshes + collision footprints
+// =====================================================================
+// Colliders are 2D footprints on the XZ plane; height is ignored, so anything
+// flagged `collide` blocks the player regardless of how tall it is.
+const colliders = { boxes: [], circles: [] };
+
+const matCache = {};
+function mat(color, emissive = 0x000000) {
+  const key = color + ':' + emissive;
+  return matCache[key] || (matCache[key] = new THREE.MeshLambertMaterial({ color, emissive }));
+}
+function shade(hex, k) { return new THREE.Color(hex).multiplyScalar(k).getHex(); }
+
+function finish(mesh, opts) {
+  mesh.castShadow = opts.shadow !== false;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
+// Axis-aligned box: (x, z) is the centre of its footprint, y is its BOTTOM.
+// opts: { collide, emissive, shadow }
+function addBox(w, h, d, x, y, z, color, opts = {}) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, opts.emissive));
+  mesh.position.set(x, y + h / 2, z);
+  if (opts.collide) colliders.boxes.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2 });
+  return finish(mesh, opts);
+}
+// Upright cylinder, y is its BOTTOM. rTop !== rBottom gives a taper/flare.
+// opts: { collide, emissive, shadow, segments }
+function addCylinder(rTop, rBottom, h, x, y, z, color, opts = {}) {
+  const geo = new THREE.CylinderGeometry(rTop, rBottom, h, opts.segments || 24);
+  const mesh = new THREE.Mesh(geo, mat(color, opts.emissive));
+  mesh.position.set(x, y + h / 2, z);
+  if (opts.collide) colliders.circles.push({ x, z, r: Math.max(rTop, rBottom) });
+  return finish(mesh, opts);
+}
+
+// =====================================================================
+// 5. SHELL — floor, walkway, outer walls, ceiling, entrance
+// =====================================================================
+const W = HALL.halfW, L = HALL.halfL, H = HALL.height, T = 0.3;   // T = wall thickness
+addBox(W * 2, 0.1, L * 2, 0, -0.1, 0, COLORS.floor, { shadow: false });
+addBox(WALKWAY_HALF_W * 2, 0.01, L * 2, 0, 0, 0, COLORS.walkway, { shadow: false });   // central walkway strip
+addBox(W * 2 + T * 2, H, T, 0, 0, -L - T / 2, COLORS.wall, { collide: true, shadow: false });   // north
+addBox(W * 2 + T * 2, H, T, 0, 0,  L + T / 2, COLORS.wall, { collide: true, shadow: false });   // south
+addBox(T, H, L * 2, -W - T / 2, 0, 0, COLORS.wall, { collide: true, shadow: false });           // west
+addBox(T, H, L * 2,  W + T / 2, 0, 0, COLORS.wall, { collide: true, shadow: false });           // east
+addBox(W * 2, 0.1, L * 2, 0, H, 0, COLORS.ceiling, { shadow: false });
+
+// Fluorescent strips down the walkway: a continuous line to follow end-to-end
+for (let z = -12; z <= 12; z += 4) addBox(0.25, 0.05, 2.4, 0, H - 0.05, z, 0xffffff, { emissive: 0xfff6d8, shadow: false });
+
+// Entrance (fixed anchor): pulled-down shutter set into the south wall
+addBox(4, 3, 0.1, 0, 0, L - 0.05, 0x8a8f94, { collide: true, shadow: false });
+for (let y = 0.2; y < 3; y += 0.25) addBox(4, 0.03, 0.12, 0, y, L - 0.06, 0x6c7176, { shadow: false });
+addBox(4.6, 0.6, 0.2, 0, 3.1, L - 0.1, 0x2f5d8a, { shadow: false });   // header band above shutter
+
+// =====================================================================
+// 6. STALLS — three-sided booths open onto the walkway
+// =====================================================================
+// side: -1 = west, +1 = east. zc: centre along the hall. gapEnd: which end
+// (-1 north / +1 south) of the counter is left open to step inside.
+function makeStall(side, zc, color, gapEnd) {
+  const len = 5, depth = W - WALKWAY_HALF_W;
+  const cx = side * (WALKWAY_HALF_W + depth / 2);
+  addBox(depth, 0.01, len, cx, 0.01, zc, shade(color, 0.45), { shadow: false });   // floor tint
+  for (const dz of [-len / 2, len / 2]) addBox(depth, 2.6, 0.15, cx, 0, zc + dz, COLORS.stallWall, { collide: true });
+  // Front counter, leaving ~1.45 m gap at gapEnd
+  const counterLen = 3.4, counterX = side * (WALKWAY_HALF_W + 0.4);
+  const counterZ = zc - gapEnd * (len / 2 - 0.075 - counterLen / 2);
+  addBox(0.6, 1.0, counterLen, counterX, 0, counterZ, shade(color, 0.7), { collide: true });
+  // Back shelf against the outer wall
+  const shelfX = side * (W - 0.3);
+  addBox(0.6, 2.0, 3.6, shelfX, 0, zc, COLORS.shelf, { collide: true });
+  // Awning / sign band in the stall's identity colour (overhead, walk-under)
+  addBox(0.4, 0.5, len, side * (WALKWAY_HALF_W + 0.2), 2.6, zc, color);
+  // Placeholder goods: boxes on the counter and on top of the shelf
+  for (let i = -1; i <= 1; i++) {
+    addBox(0.3, 0.22, 0.4, counterX, 1.0, counterZ + i * 1.0, shade(color, 1.2 - 0.25 * (i + 1)));
+    addBox(0.45, 0.35, 0.8, shelfX, 2.0, zc + i * 1.2, shade(color, 0.55 + 0.2 * (i + 1)));
+  }
+}
+makeStall(-1,  4.5, 0x2a9d8f, -1);   // row A west: teal
+makeStall( 1,  4.5, 0xe9c46a, -1);   // row A east: mustard
+makeStall(-1, -6.5, 0xe76f51,  1);   // row B west: coral
+makeStall( 1, -6.5, 0x7d6bd1,  1);   // row B east: violet
+
+// =====================================================================
+// 7. LANDMARKS — fixed anchors that never drift (DESIGN.md §3)
+// =====================================================================
+// Fountain: centre of the plaza between the two stall rows
+const F = { x: 0, z: -1 };
+addCylinder(2.9, 2.9, 0.02, F.x, 0, F.z, 0x6e675c, { segments: 48, shadow: false });   // plaza paving ring
+addCylinder(1.7, 1.8, 0.55, F.x, 0, F.z, COLORS.stone, { collide: true, segments: 32 }); // basin
+addCylinder(1.55, 1.55, 0.02, F.x, 0.55, F.z, COLORS.water, { emissive: 0x0a2a36, segments: 32 });
+addCylinder(0.18, 0.25, 1.5, F.x, 0.55, F.z, COLORS.stone);                               // column
+addCylinder(0.8, 0.3, 0.3, F.x, 2.0, F.z, COLORS.stone);                                  // upper bowl
+addCylinder(0.7, 0.7, 0.02, F.x, 2.3, F.z, COLORS.water, { emissive: 0x0a2a36 });
+addCylinder(0.06, 0.1, 0.45, F.x, 2.3, F.z, COLORS.stone);                                // spout
+
+// Vermilion pillar: floor-to-ceiling, glowing lantern band, in the entrance hall
+const P = { x: 0, z: 9.5 };
+addCylinder(0.75, 0.75, 0.35, P.x, 0, P.z, 0x3a3632, { collide: true, segments: 8 });     // octagonal plinth
+addCylinder(0.42, 0.42, H - 0.35, P.x, 0.35, P.z, 0xb3261e, { segments: 16 });
+for (const y of [0.9, 3.5]) addCylinder(0.47, 0.47, 0.12, P.x, y, P.z, 0xd4a72c, { segments: 16 });
+addCylinder(0.55, 0.55, 0.6, P.x, 2.1, P.z, 0xffe7a3, { emissive: 0xffb84d, segments: 16 });
+
+// =====================================================================
+// 8. DESK AREA — the compositing desk at the north end
+// =====================================================================
+addBox(7, 0.02, 3.6, 0, 0.01, -12, 0x2f4a43, { shadow: false });   // rug marking the area
+for (const s of [-1, 1]) {
+  addBox(0.15, 1.2, 3.4, s * 3.6, 0, -12.3, COLORS.stallWall, { collide: true });   // framing half-walls
+  addBox(0.8, 0.8, 0.8, s * 5.4, 0, -13.2, 0x9b7b52, { collide: true });            // crates in the corners
+  addBox(0.7, 0.6, 0.7, s * 5.4, 0.8, -13.2, 0x8a6b45);
+}
+// Desk: wooden top on four legs, with an inset lightbox panel (the compositing surface)
+const DESK = { x: 0, z: -12.4, w: 2.4, d: 1.1, h: 0.78 };
+addBox(DESK.w, 0.06, DESK.d, DESK.x, DESK.h - 0.06, DESK.z, COLORS.wood, { collide: true });
+for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+  addBox(0.07, DESK.h - 0.06, 0.07, DESK.x + sx * (DESK.w / 2 - 0.08), 0, DESK.z + sz * (DESK.d / 2 - 0.08), shade(COLORS.wood, 0.8));
+}
+addBox(1.3, 0.02, 0.75, DESK.x, DESK.h, DESK.z, 0xf5efdf, { emissive: 0x5a5448, shadow: false });
+addCylinder(0.02, 0.02, 0.55, DESK.x + 0.95, DESK.h, DESK.z - 0.35, 0x3a3632);           // lamp stem
+addCylinder(0.06, 0.18, 0.16, DESK.x + 0.95, DESK.h + 0.5, DESK.z - 0.35, 0x2f5d8a);     // lamp shade
+// Shelving on the north wall: back panel, three boards, rows of binders
+const SHELF_Z = -L + 0.25;
+addBox(5, 2.2, 0.1, 0, 0, -L + 0.05, COLORS.shelf);
+colliders.boxes.push({ minX: -2.5, maxX: 2.5, minZ: -L, maxZ: -L + 0.5 });   // footprint of the whole unit
+const BINDERS = [0x2a9d8f, 0xe76f51, 0x7d6bd1, 0xe9c46a, 0x3a3632, 0xd8d1c4];
+for (const y of [0.35, 1.05, 1.75]) {
+  addBox(5, 0.04, 0.45, 0, y, SHELF_Z, shade(COLORS.shelf, 1.2));
+  for (let i = 0; i < 28; i++) {
+    const h = 0.26 + ((i * 7 + y * 10) % 5) * 0.02;
+    addBox(0.1, h, 0.34, -2.3 + i * 0.17, y + 0.04, SHELF_Z, BINDERS[(i * 5 + Math.round(y * 3)) % BINDERS.length]);
+  }
+}
+
+// =====================================================================
+// 9. INPUT — pointer lock, mouse look, keyboard
+// =====================================================================
+const overlay = document.getElementById('overlay');
+const keys = new Set();
+let locked = false;
+let yaw = CONFIG.spawn.yaw, pitch = 0;
+
+overlay.addEventListener('click', () => {
+  const p = renderer.domElement.requestPointerLock();
+  // newer browsers return a promise and reject if re-locked too quickly after Esc
+  if (p && p.catch) p.catch((err) => logEvent('input-warn', 'pointer lock refused (click again)', String(err)));
+});
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === renderer.domElement;
+  overlay.classList.toggle('hidden', locked);
+  if (!locked) keys.clear();
+  setFlag('input.pointerLocked', locked);
+  logEvent('input', locked ? 'pointer locked' : 'pointer released');
+});
+document.addEventListener('pointerlockerror', () => logEvent('input-warn', 'pointer lock error (click again)'));
+document.addEventListener('mousemove', (e) => {
+  if (!locked || Math.abs(e.movementX) > 400) return;   // drop the occasional bogus spike some browsers emit
+  yaw -= e.movementX * CONFIG.mouseSensitivity;
+  pitch -= e.movementY * CONFIG.mouseSensitivity;
+  pitch = Math.max(-1.5, Math.min(1.5, pitch));
+});
+document.addEventListener('keydown', (e) => { if (locked) keys.add(e.code); });   // e.code = physical key
+document.addEventListener('keyup', (e) => keys.delete(e.code));
+window.addEventListener('blur', () => keys.clear());
+
+// =====================================================================
+// 10. MOVEMENT & COLLISION
+// =====================================================================
+const player = { x: CONFIG.spawn.x, z: CONFIG.spawn.z, vx: 0, vz: 0 };
+const held = (...codes) => codes.some((c) => keys.has(c));
+
+function updatePlayer(dt) {
+  let f = (held('KeyW', 'ArrowUp') ? 1 : 0) - (held('KeyS', 'ArrowDown') ? 1 : 0);
+  let s = (held('KeyD', 'ArrowRight') ? 1 : 0) - (held('KeyA', 'ArrowLeft') ? 1 : 0);
+  const n = Math.hypot(f, s) || 1;   // no faster on diagonals
+  f /= n; s /= n;
+  // Forward is -Z at yaw 0, right is +X; rotate both by yaw
+  const sin = Math.sin(yaw), cos = Math.cos(yaw);
+  const tx = (-sin * f + cos * s) * CONFIG.walkSpeed;
+  const tz = (-cos * f - sin * s) * CONFIG.walkSpeed;
+  const k = 1 - Math.exp(-CONFIG.accel * dt);   // frame-rate-independent easing
+  player.vx += (tx - player.vx) * k;
+  player.vz += (tz - player.vz) * k;
+  player.x += player.vx * dt;
+  player.z += player.vz * dt;
+  resolveCollisions(player);
+}
+
+// Push the player's circle out of every overlapping footprint. Pushing along
+// the contact normal (not reverting the move) lets the player slide along walls.
+function resolveCollisions(p) {
+  const R = CONFIG.playerRadius;
+  for (let iter = 0; iter < 3; iter++) {   // a few passes settle corners where colliders meet
+    for (const b of colliders.boxes) {
+      const dx = p.x - Math.max(b.minX, Math.min(p.x, b.maxX));
+      const dz = p.z - Math.max(b.minZ, Math.min(p.z, b.maxZ));
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= R * R) continue;
+      if (d2 > 1e-10) {
+        const d = Math.sqrt(d2);
+        p.x += (dx / d) * (R - d);
+        p.z += (dz / d) * (R - d);
+      } else {   // centre ended up inside the box: exit via the nearest face
+        const exits = [[b.minX - R - p.x, 0], [b.maxX + R - p.x, 0], [0, b.minZ - R - p.z], [0, b.maxZ + R - p.z]];
+        const [ex, ez] = exits.reduce((a, c) => (Math.abs(a[0] + a[1]) <= Math.abs(c[0] + c[1]) ? a : c));
+        p.x += ex; p.z += ez;
+      }
+    }
+    for (const c of colliders.circles) {
+      const dx = p.x - c.x, dz = p.z - c.z, min = c.r + R;
+      const d = Math.hypot(dx, dz);
+      if (d >= min) continue;
+      const nx = d > 1e-6 ? dx / d : 0, nz = d > 1e-6 ? dz / d : 1;
+      p.x = c.x + nx * min;
+      p.z = c.z + nz * min;
+    }
+  }
+  checkCollisionHealth(p);
+}
+
+// Deepest overlap (metres) between the player circle and any collider; 0 = clear
+function penetration(p) {
+  const R = CONFIG.playerRadius;
+  let worst = 0;
+  for (const b of colliders.boxes) {
+    const inside = p.x > b.minX && p.x < b.maxX && p.z > b.minZ && p.z < b.maxZ;
+    const d = Math.hypot(p.x - Math.max(b.minX, Math.min(p.x, b.maxX)), p.z - Math.max(b.minZ, Math.min(p.z, b.maxZ)));
+    worst = Math.max(worst, inside ? R : R - d);
+  }
+  for (const c of colliders.circles) worst = Math.max(worst, c.r + CONFIG.playerRadius - Math.hypot(p.x - c.x, p.z - c.z));
+  return worst;
+}
+
+// Collision error reporting: NaN positions get reset to spawn; a player left
+// overlapping geometry after resolution logs once per stuck episode.
+function checkCollisionHealth(p) {
+  if (!Number.isFinite(p.x) || !Number.isFinite(p.z)) {
+    logEvent('collision-error', 'non-finite player position, resetting to spawn', { x: p.x, z: p.z });
+    Object.assign(p, { x: CONFIG.spawn.x, z: CONFIG.spawn.z, vx: 0, vz: 0 });
+    return;
+  }
+  const depth = penetration(p);
+  const stuck = depth > 0.02;
+  if (stuck && !getFlag('collision.stuck')) {
+    logEvent('collision-error', 'player still overlapping geometry after resolve', { x: +p.x.toFixed(2), z: +p.z.toFixed(2), depth: +depth.toFixed(3) });
+    incFlag('collision.stuckCount');
+  }
+  setFlag('collision.stuck', stuck);
+}
+
+// Startup sanity: malformed colliders, and a spawn point inside geometry
+colliders.boxes.forEach((b, i) => {
+  if (![b.minX, b.maxX, b.minZ, b.maxZ].every(Number.isFinite) || b.minX >= b.maxX || b.minZ >= b.maxZ)
+    logEvent('collision-error', `malformed box collider #${i}`, b);
+});
+colliders.circles.forEach((c, i) => {
+  if (![c.x, c.z, c.r].every(Number.isFinite) || c.r <= 0) logEvent('collision-error', `malformed circle collider #${i}`, c);
+});
+logEvent('world', 'layout built', { meshes: scene.children.length, boxColliders: colliders.boxes.length, circleColliders: colliders.circles.length });
+if (penetration(player) > 0) logEvent('collision-error', 'spawn point overlaps geometry', CONFIG.spawn);
+setFlag('collision.stuck', false);
+setFlag('collision.stuckCount', 0);
+setFlag('player.spawned', true);
+logEvent('player', 'spawn', { ...CONFIG.spawn });
+
+// =====================================================================
+// 11. MAIN LOOP
+// =====================================================================
+const clock = new THREE.Clock();
+const hud = document.getElementById('hud');
+
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05);   // clamp so a stalled tab can't tunnel through walls
+  updatePlayer(dt);
+  camera.position.set(player.x, CONFIG.eyeHeight, player.z);
+  camera.rotation.set(pitch, yaw, 0);
+  hud.textContent = `x ${player.x.toFixed(1)}  z ${player.z.toFixed(1)}`;   // playtest readout
+  renderer.render(scene, camera);
+}
+frame();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
