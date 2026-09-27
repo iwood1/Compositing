@@ -19,16 +19,20 @@
             padding: 8px 10px; background: rgba(0, 0, 0, 0.72); color: #cfe8cf; font: 11px/1.4 monospace;
             white-space: pre-wrap; word-break: break-all; pointer-events: none; z-index: 10; display: none; }
   #devlog.open { display: block; }
+  #prompt { position: fixed; left: 50%; top: calc(50% + 28px); transform: translateX(-50%); color: #f3eee2;
+            font: 13px monospace; text-shadow: 0 1px 3px #000; pointer-events: none; display: none; }
+  #prompt.show { display: block; }
 </style>
 </head>
 <body>
 <div id="overlay">
   <h1>ROOM 467</h1>
   <p><b>Click</b> to walk</p>
-  <p>WASD / arrows: move &nbsp;·&nbsp; Mouse: look &nbsp;·&nbsp; Esc: release cursor &nbsp;·&nbsp; ` : debug overlay</p>
+  <p>WASD / arrows: move &nbsp;·&nbsp; Mouse: look &nbsp;·&nbsp; E: examine &nbsp;·&nbsp; Esc: release cursor &nbsp;·&nbsp; ` : debug overlay</p>
 </div>
 <div id="crosshair"></div>
 <div id="hud"></div>
+<div id="prompt"></div>
 <pre id="devlog"></pre>
 
 <script>
@@ -324,7 +328,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 document.addEventListener('pointerlockerror', () => logEvent('input-warn', 'pointer lock error (click again)'));
 document.addEventListener('mousemove', (e) => {
-  if (!locked || Math.abs(e.movementX) > 400) return;   // drop the occasional bogus spike some browsers emit
+  if (!locked || Examine.active || Math.abs(e.movementX) > 400) return;   // drop the occasional bogus spike some browsers emit
   yaw -= e.movementX * CONFIG.mouseSensitivity;
   pitch -= e.movementY * CONFIG.mouseSensitivity;
   pitch = Math.max(-1.5, Math.min(1.5, pitch));
@@ -434,7 +438,161 @@ setFlag('player.spawned', true);
 logEvent('player', 'spawn', { ...CONFIG.spawn });
 
 // =====================================================================
-// 11. MAIN LOOP
+// 11. CELS — pickup & examine
+// =====================================================================
+// Placeholder cels. Everything except `place` is the object's data and is
+// logged as-is, so real cel records can slot in here later.
+//   layer: background | character | effects  (what compositing will stack)
+//   condition: 0..1 placeholder for DESIGN.md §4.1
+const CEL = {
+  range: 2.0,              // max look distance to target a cel (metres)
+  holdDistance: 0.42,      // how far in front of the eye it's held
+  turnSensitivity: 0.004,  // radians per pixel of mouse movement while examining
+  lerpRate: 9,             // fly-to-hand / fly-back speed
+};
+const CEL_DEFS = [
+  { id: 'cel-01', cut: 'C-014', layer: 'character', condition: 0.8, origin: 'stamped: Studio Hoshino (?)', foundAt: 'teal stall counter',
+    paper: '#f3eee2', ink: '#e76f51', place: { x: -2.9, y: 1.006, z: 4.725, rx: -Math.PI / 2, ry: Math.PI / 2 } },
+  { id: 'cel-02', cut: 'C-102', layer: 'background', condition: 0.55, origin: 'no stamp', foundAt: 'violet stall counter',
+    paper: '#cfe3f0', ink: '#2f5d8a', place: { x: 2.9, y: 1.006, z: -7.725, rx: -Math.PI / 2, ry: -Math.PI / 2 } },
+  { id: 'cel-03', cut: 'C-0??', layer: 'effects', condition: 0.3, origin: 'handwritten: "Hoshino-Ga"', foundAt: 'mustard stall, leaning on shelf',
+    paper: '#d9ecc8', ink: '#6a4c93', place: { x: 6.36, y: 0.13, z: 4.0, rx: -0.25, ry: -Math.PI / 2 } },
+];
+
+// Procedural placeholder art: a motif per layer type, peg holes, cut number
+function makeCelTexture(def) {
+  const c = document.createElement('canvas');
+  c.width = 320; c.height = 260;
+  const g = c.getContext('2d');
+  g.fillStyle = def.paper; g.fillRect(0, 0, 320, 260);
+  g.fillStyle = g.strokeStyle = def.ink; g.lineWidth = 6;
+  if (def.layer === 'background') {          // horizon, hills, a sun
+    g.fillRect(0, 170, 320, 90);
+    g.beginPath(); g.ellipse(90, 175, 120, 50, 0, Math.PI, 0); g.fill();
+    g.beginPath(); g.arc(240, 90, 28, 0, Math.PI * 2); g.stroke();
+  } else if (def.layer === 'character') {    // a head-and-shoulders figure
+    g.beginPath(); g.arc(160, 110, 42, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(160, 230, 80, 60, 0, Math.PI, 0); g.fill();
+  } else {                                   // effects: radiating burst lines
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2;
+      g.beginPath(); g.moveTo(160 + Math.cos(a) * 30, 135 + Math.sin(a) * 30);
+      g.lineTo(160 + Math.cos(a) * 110, 135 + Math.sin(a) * 90); g.stroke();
+    }
+  }
+  g.fillStyle = '#1e1d1b';                   // registration peg holes along the top
+  for (const x of [80, 240]) { g.beginPath(); g.ellipse(x, 18, 18, 6, 0, 0, Math.PI * 2); g.fill(); }
+  g.beginPath(); g.arc(160, 18, 8, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#1e1d1b';
+  g.font = 'bold 22px monospace'; g.fillText(def.cut, 14, 246);
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+// Build the meshes. Phong (not Lambert) so turning a cel shows a sheen off
+// the directional light, like acetate catching a lamp.
+const cels = CEL_DEFS.map((def) => {
+  const { place, paper, ink, ...props } = def;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.26),
+    new THREE.MeshPhongMaterial({ map: makeCelTexture(def), side: THREE.DoubleSide, shininess: 80, specular: 0x555555 }));
+  mesh.position.set(place.x, place.y, place.z);
+  mesh.rotation.set(place.rx, place.ry, 0, 'YXZ');
+  mesh.receiveShadow = true;
+  mesh.userData = { cel: true, props, state: 'rest', homePos: mesh.position.clone(), homeQuat: mesh.quaternion.clone() };
+  scene.add(mesh);
+  return mesh;
+});
+
+const Examine = { active: false, cel: null, target: null, rotX: 0, rotY: 0, startedAt: 0, sawBack: false };
+const raycaster = new THREE.Raycaster();
+const SCREEN_CENTRE = new THREE.Vector2(0, 0);
+const promptEl = document.getElementById('prompt');
+const crosshairEl = document.getElementById('crosshair');
+const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ');
+
+function beginExamine(cel) {
+  const d = cel.userData.props;
+  const firstTime = !getFlag(`examined:${d.id}`, false);
+  Object.assign(Examine, { active: true, cel, target: null, rotX: 0, rotY: 0, startedAt: performance.now(), sawBack: false });
+  cel.userData.state = 'held';
+  cel.material.depthTest = false;   // draw over walls so it never clips while held
+  cel.renderOrder = 999;
+  player.vx = player.vz = 0;        // no drift once walking resumes
+  setFlag(`examined:${d.id}`, true);
+  setFlag('cel.inHand', d.id);
+  logEvent('cel', `picked up ${d.id}`, { ...d, firstTime });
+}
+
+function endExamine(reason) {
+  const cel = Examine.cel, d = cel.userData.props;
+  cel.userData.state = 'returning';
+  Examine.active = false;
+  Examine.cel = null;
+  setFlag('cel.inHand', null);
+  logEvent('cel', `put back ${d.id}`, {
+    id: d.id, cut: d.cut, origin: d.origin,
+    heldSeconds: +((performance.now() - Examine.startedAt) / 1000).toFixed(1),
+    sawBack: Examine.sawBack, reason,
+  });
+}
+
+// While examining, mouse turns the cel instead of the head
+document.addEventListener('mousemove', (e) => {
+  if (!locked || !Examine.active || Math.abs(e.movementX) > 400) return;
+  Examine.rotY += e.movementX * CEL.turnSensitivity;
+  Examine.rotX = Math.max(-1.3, Math.min(1.3, Examine.rotX + e.movementY * CEL.turnSensitivity));
+  if (Math.abs(Math.atan2(Math.sin(Examine.rotY), Math.cos(Examine.rotY))) > Math.PI / 2) Examine.sawBack = true;
+});
+document.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'KeyE' && locked) {
+    if (Examine.active) endExamine('key');
+    else if (Examine.target) beginExamine(Examine.target);
+  } else if (e.code === 'Escape' && Examine.active) endExamine('escape');
+});
+// Most browsers swallow Esc to release pointer lock, so treat that as "put it back" too
+document.addEventListener('pointerlockchange', () => { if (!locked && Examine.active) endExamine('pointer released'); });
+
+function updateCels(dt) {
+  const k = 1 - Math.exp(-CEL.lerpRate * dt);
+  camera.updateMatrixWorld();
+  for (const cel of cels) {
+    const u = cel.userData;
+    if (u.state === 'held') {
+      _v.set(0, 0, -CEL.holdDistance).applyQuaternion(camera.quaternion).add(camera.position);
+      _q.setFromEuler(_e.set(Examine.rotX, Examine.rotY, 0)).premultiply(camera.quaternion);
+      cel.position.lerp(_v, k);
+      cel.quaternion.slerp(_q, k);
+    } else if (u.state === 'returning') {
+      cel.position.lerp(u.homePos, k);
+      cel.quaternion.slerp(u.homeQuat, k);
+      if (cel.position.distanceTo(u.homePos) < 0.002) {
+        cel.position.copy(u.homePos);
+        cel.quaternion.copy(u.homeQuat);
+        cel.material.depthTest = true;
+        cel.renderOrder = 0;
+        u.state = 'rest';
+      }
+    }
+  }
+  // Look targeting: nearest thing under the crosshair, if it's a resting cel in range
+  Examine.target = null;
+  if (locked && !Examine.active) {
+    raycaster.setFromCamera(SCREEN_CENTRE, camera);
+    raycaster.far = CEL.range;
+    const hit = raycaster.intersectObjects(scene.children, false)[0];
+    if (hit && hit.object.userData.cel && hit.object.userData.state === 'rest') Examine.target = hit.object;
+  }
+  const text = Examine.active ? 'Mouse: turn  ·  [E] put back' : Examine.target ? '[E] Examine' : '';
+  if (promptEl.textContent !== text) promptEl.textContent = text;
+  promptEl.classList.toggle('show', text !== '');
+  crosshairEl.style.display = Examine.active ? 'none' : '';
+}
+logEvent('world', 'cels placed', CEL_DEFS.map((d) => d.id));
+
+// =====================================================================
+// 12. MAIN LOOP
 // =====================================================================
 const clock = new THREE.Clock();
 const hud = document.getElementById('hud');
@@ -442,9 +600,10 @@ const hud = document.getElementById('hud');
 function frame() {
   requestAnimationFrame(frame);
   const dt = Math.min(clock.getDelta(), 0.05);   // clamp so a stalled tab can't tunnel through walls
-  updatePlayer(dt);
+  if (!Examine.active) updatePlayer(dt);   // examining pauses walking
   camera.position.set(player.x, CONFIG.eyeHeight, player.z);
   camera.rotation.set(pitch, yaw, 0);
+  updateCels(dt);
   hud.textContent = `x ${player.x.toFixed(1)}  z ${player.z.toFixed(1)}`;   // playtest readout
   renderer.render(scene, camera);
 }
