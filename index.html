@@ -38,6 +38,11 @@
   #satchel .cut { position: absolute; bottom: -15px; left: 0; right: 0; text-align: center; }
   #satchel .info { position: absolute; right: 0; bottom: calc(100% + 20px); white-space: nowrap; font: 11px monospace;
                    color: rgba(255, 255, 255, 0.85); text-shadow: 0 1px 2px #000; }
+  #dialogue { position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: min(640px, 86vw); padding: 8px 14px;
+              background: rgba(20, 19, 17, 0.7); color: #f3eee2; font: 15px/1.45 system-ui, sans-serif; text-align: center;
+              border-radius: 4px; pointer-events: none; display: none; }
+  #dialogue.show { display: block; }
+  #dialogue b { color: #e9c46a; font-weight: 600; }
   #meta { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); white-space: nowrap; color: #f3eee2;
           font: 13px monospace; text-shadow: 0 1px 3px #000; pointer-events: none; }
 </style>
@@ -55,6 +60,7 @@
 <div id="satchel"></div>
 <div id="keys"></div>
 <div id="meta"></div>
+<div id="dialogue"></div>
 <pre id="devlog"></pre>
 
 <script>
@@ -470,6 +476,7 @@ logEvent('player', 'spawn', { ...CONFIG.spawn });
 //   layer: background | character | effects  (what compositing will stack)
 //   condition: 0..1 placeholder for DESIGN.md §4.1
 //   scene / tone: continuity metadata, shown in the examine + satchel UI
+//   resonance: 'care' | 'violence' (section 15); never shown to the player
 //   holes: optional per-cel peg-hole positions (else CEL_HOLES); a damaged
 //          cel can carry shifted holes and will register shifted (section 13)
 //   motif: which placeholder drawing to paint (defaults by layer)
@@ -481,17 +488,17 @@ const CEL = {
 };
 const CEL_HOLES = [[-0.08, 0.112], [0.08, 0.112]];   // standard peg holes, cel-plane metres from centre (+y = top edge)
 const CEL_DEFS = [
-  { id: 'cel-01', cut: 'C-014', scene: '12', tone: 'warm', layer: 'character', condition: 0.8, origin: 'stamped: Studio Hoshino (?)', foundAt: 'teal stall counter',
+  { id: 'cel-01', resonance: 'care', cut: 'C-014', scene: '12', tone: 'warm', layer: 'character', condition: 0.8, origin: 'stamped: Studio Hoshino (?)', foundAt: 'teal stall counter',
     paper: '#f3eee2', ink: '#e76f51', place: { x: -2.9, y: 1.006, z: 4.725, rx: -Math.PI / 2, ry: Math.PI / 2 } },
-  { id: 'cel-02', cut: 'C-102', scene: '12', tone: 'cool', layer: 'background', condition: 0.55, origin: 'no stamp', foundAt: 'violet stall counter',
+  { id: 'cel-02', resonance: 'care', cut: 'C-102', scene: '12', tone: 'cool', layer: 'background', condition: 0.55, origin: 'no stamp', foundAt: 'violet stall counter',
     paper: '#cfe3f0', ink: '#2f5d8a', place: { x: 2.9, y: 1.006, z: -7.725, rx: -Math.PI / 2, ry: -Math.PI / 2 } },
-  { id: 'cel-03', cut: 'C-0??', scene: '?', tone: 'warm', layer: 'effects', condition: 0.3, origin: 'handwritten: "Hoshino-Ga"', foundAt: 'mustard stall, leaning on shelf',
+  { id: 'cel-03', resonance: 'violence', cut: 'C-0??', scene: '?', tone: 'warm', layer: 'effects', condition: 0.3, origin: 'handwritten: "Hoshino-Ga"', foundAt: 'mustard stall, leaning on shelf',
     paper: '#d9ecc8', ink: '#6a4c93', place: { x: 6.36, y: 0.13, z: 4.0, rx: -0.25, ry: -Math.PI / 2 } },
-  { id: 'cel-04', cut: 'C-015', scene: '12', tone: 'warm', layer: 'background', motif: 'city', condition: 0.7, origin: 'stamped: Studio Hoshino', foundAt: 'coral stall counter',
+  { id: 'cel-04', resonance: 'violence', cut: 'C-015', scene: '12', tone: 'warm', layer: 'background', motif: 'city', condition: 0.7, origin: 'stamped: Studio Hoshino', foundAt: 'coral stall counter',
     paper: '#f4dcc0', ink: '#8a3b2a', place: { x: -2.9, y: 1.006, z: -7.725, rx: -Math.PI / 2, ry: Math.PI / 2 } },
-  { id: 'cel-05', cut: 'C-203', scene: '31', tone: 'cool', layer: 'background', motif: 'sea', condition: 0.6, origin: 'no stamp', foundAt: 'mustard stall counter',
+  { id: 'cel-05', resonance: 'care', cut: 'C-203', scene: '31', tone: 'cool', layer: 'background', motif: 'sea', condition: 0.6, origin: 'no stamp', foundAt: 'mustard stall counter',
     paper: '#d6e4ec', ink: '#24506e', place: { x: 2.9, y: 1.006, z: 4.725, rx: -Math.PI / 2, ry: -Math.PI / 2 } },
-  { id: 'cel-06', cut: 'C-204', scene: '31', tone: 'cool', layer: 'character', motif: 'figure', condition: 0.5, origin: 'handwritten: "H-G"', foundAt: 'crates by the desk',
+  { id: 'cel-06', resonance: 'violence', cut: 'C-204', scene: '31', tone: 'cool', layer: 'character', motif: 'figure', condition: 0.5, origin: 'handwritten: "H-G"', foundAt: 'crates by the desk',
     paper: '#e8e4f4', ink: '#3a5a8a', place: { x: -5.4, y: 1.505, z: -13.2, rx: -Math.PI / 2, ry: 0 } },
 ];
 const celMeta = (p) => `${p.cut} · scene ${p.scene} · ${p.tone}`;   // the metadata line the UI shows
@@ -1245,6 +1252,7 @@ function goLive(sig) {
     blankFrames: frames.filter((f) => !f.layers.length).map((f) => f.frame),
     frames, signature: sig,
   });
+  applyResonance();   // section 15
   playReelCue();
   Reel.pulse = 1;
 }
@@ -1327,7 +1335,7 @@ function updateKeyHints() {
   const h = !locked ? ''   // the click-to-walk screen lists everything
     : Compose.active ? '<b>Mouse</b> hand · <b>Click</b> pick up / put down · <b>&lt; &gt;</b> or <b>← →</b> frame · <b>Space</b> play / stop · <b>E</b> stand up'
     : Examine.active ? '<b>Mouse</b> turn · <b>E</b> put back · <b>F</b> take into satchel'
-    : `<b>WASD</b> move · <b>E</b> examine / sit · <b>Tab</b> satchel · <b>1-${n}</b> choose · <b>G</b> drop · <b>\`</b> debug`;
+    : `<b>WASD</b> move · <b>E</b> examine / sit / talk · <b>Tab</b> satchel · <b>1-${n}</b> choose · <b>G</b> drop · <b>\`</b> debug`;
   if (h !== lastHints) { keysEl.innerHTML = h; lastHints = h; }
   updateInfoLine();
 }
@@ -1348,7 +1356,107 @@ function updateInfoLine() {
 }
 
 // =====================================================================
-// 15. MAIN LOOP
+// 15. RESONANCE & NPC — compose -> delayed, unannounced NPC reaction
+// =====================================================================
+// Slice version of DESIGN.md §4.4: two tags only, Care and Violence (a
+// tension pair). Each cel carries one (CEL_DEFS.resonance). When a reel goes
+// live, every tag present anywhere on the sheet gets +1. Opposed tags don't
+// cancel: a reel with both bumps both.
+//
+// One NPC, "the regular", stands in the plaza. Once either counter reaches
+// RESONANCE_THRESHOLD, their line silently swaps to a second one. Nothing in
+// the world signals it (same voice, same UI, no effect); only the dev log
+// records the moment ("npc-shift"). The player notices only if they go back
+// and talk to them again.
+const RESONANCE_TAGS = ['care', 'violence'];
+const RESONANCE_THRESHOLD = 2;
+RESONANCE_TAGS.forEach((t) => setFlag(`resonance:${t}`, 0));
+
+function applyResonance() {
+  const tags = RESONANCE_TAGS.filter((t) => Desk.slots.some((layers) => layers.some((c) => c.userData.props.resonance === t)));
+  tags.forEach((t) => incFlag(`resonance:${t}`));
+  const totals = Object.fromEntries(RESONANCE_TAGS.map((t) => [t, getFlag(`resonance:${t}`)]));
+  logEvent('resonance', tags.length ? tags.map((t) => `+1 ${t}`).join(', ') : 'no tags', { incremented: tags, totals, reel: getFlag('reelsCompleted') });
+  checkNpcShift();
+}
+
+// --- The regular: a simple standing figure with an idle loop
+const NPC_LINES = {
+  default: 'You’re the one restoring those old cels? Hm. Mind the fountain — the tiles get slick.',
+  care: 'You’re the one restoring those old cels? My brother used to carry me home through this arcade when I fell asleep watching that show. Mind the fountain.',
+  violence: 'You’re the one restoring those old cels? Careful. Someone put a fist through the glass by the fountain last winter. Nobody saw who.',
+};
+const Npc = { name: 'The regular', line: 'default', talkRange: 2.2, pos: { x: 4.3, z: -1.3 }, yaw: -Math.PI / 2, canTalk: false, sayUntil: 0 };
+const npcGroup = new THREE.Group();
+{
+  const part = (geo, color, y) => {
+    const m = new THREE.Mesh(geo, mat(color));
+    m.position.y = y; m.castShadow = true; m.receiveShadow = true;
+    npcGroup.add(m);
+    return m;
+  };
+  part(new THREE.CylinderGeometry(0.17, 0.15, 0.82, 12), 0x3b3f4a, 0.41);   // legs
+  Npc.torso = part(new THREE.CylinderGeometry(0.2, 0.24, 0.62, 12), 0x7a4e3a, 1.13);   // coat
+  Npc.head = part(new THREE.SphereGeometry(0.13, 16, 12), 0xd9b99b, 1.6);
+  const eyes = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.025, 0.02), mat(0x1e1d1b));   // shows which way they face
+  eyes.position.set(0, 0.02, 0.12);
+  Npc.head.add(eyes);
+}
+npcGroup.position.set(Npc.pos.x, 0, Npc.pos.z);
+npcGroup.rotation.y = Npc.yaw;
+scene.add(npcGroup);
+colliders.circles.push({ x: Npc.pos.x, z: Npc.pos.z, r: 0.3 });
+setFlag('npc.regular.line', Npc.line);
+
+function checkNpcShift() {
+  if (Npc.line !== 'default') return;   // one swap only, for the slice
+  const tag = RESONANCE_TAGS.find((t) => getFlag(`resonance:${t}`) >= RESONANCE_THRESHOLD);
+  if (!tag) return;
+  Npc.line = tag;
+  setFlag('npc.regular.line', tag);
+  logEvent('npc-shift', `the regular: dialogue swapped to "${tag}"`, {
+    npc: 'regular', tag, threshold: RESONANCE_THRESHOLD, total: getFlag(`resonance:${tag}`), from: 'default', to: tag, line: NPC_LINES[tag],
+  });
+}
+
+const dialogueEl = document.getElementById('dialogue');
+function talk() {
+  dialogueEl.innerHTML = `<b>${Npc.name}:</b> “${NPC_LINES[Npc.line]}”`;   // same presentation whichever line
+  dialogueEl.classList.add('show');
+  Npc.sayUntil = performance.now() + 6000;
+  incFlag('npc.regular.talks');
+  logEvent('npc', 'talked to the regular', { line: Npc.line });
+}
+// Capture phase: runs before the E handlers in sections 11 and 13, and only
+// claims E when no cel or desk is targeted, so it never steals their press.
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyE' && !e.repeat && locked && Npc.canTalk) talk();
+}, { capture: true });
+
+function updateNpc(dt) {
+  const t = performance.now() / 1000;
+  const dx = player.x - Npc.pos.x, dz = player.z - Npc.pos.z, dist = Math.hypot(dx, dz);
+  // Idle: breathing, a slow look around; turns toward the player when close
+  Npc.torso.scale.y = 1 + Math.sin(t * 1.7) * 0.015;
+  Npc.head.position.y = 1.6 + Math.sin(t * 1.7) * 0.004;
+  const want = dist < 3.5 ? Math.atan2(dx, dz) : Npc.yaw + Math.sin(t * 0.35) * 0.6;
+  let diff = want - npcGroup.rotation.y;
+  diff = Math.atan2(Math.sin(diff), Math.cos(diff));   // shortest way round
+  npcGroup.rotation.y += diff * (1 - Math.exp(-2 * dt));
+  Npc.head.rotation.y = dist < 3.5 ? 0 : Math.sin(t * 0.9) * 0.25;
+
+  Npc.canTalk = locked && dist < Npc.talkRange && !Examine.active && !Compose.active && !Examine.target && !Desk.target && !Desk.targetCel;
+  if (Npc.canTalk && !dialogueEl.classList.contains('show')) {
+    if (promptEl.textContent !== '[E] Talk') promptEl.textContent = '[E] Talk';
+    promptEl.classList.add('show');
+  }
+  if (dialogueEl.classList.contains('show') && (performance.now() > Npc.sayUntil || dist > Npc.talkRange + 1.5 || Compose.active)) {
+    dialogueEl.classList.remove('show');
+  }
+}
+
+// =====================================================================
+// 16. MAIN LOOP
 // =====================================================================
 const clock = new THREE.Clock();
 const hud = document.getElementById('hud');
@@ -1362,6 +1470,7 @@ function frame() {
   updateCels(dt);
   updateSatchel();
   updateCompose(dt);   // after the others: overrides the camera while seated
+  updateNpc(dt);
   updateKeyHints();
   hud.textContent = `x ${player.x.toFixed(1)}  z ${player.z.toFixed(1)}`;   // playtest readout
   renderer.render(scene, camera);
