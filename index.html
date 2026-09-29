@@ -36,13 +36,17 @@
   #satchel .dot { position: absolute; inset: 9px 13px; border-radius: 50%; }
   #satchel .key { position: absolute; top: -14px; left: 1px; }
   #satchel .cut { position: absolute; bottom: -15px; left: 0; right: 0; text-align: center; }
+  #satchel .info { position: absolute; right: 0; bottom: calc(100% + 20px); white-space: nowrap; font: 11px monospace;
+                   color: rgba(255, 255, 255, 0.85); text-shadow: 0 1px 2px #000; }
+  #meta { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); white-space: nowrap; color: #f3eee2;
+          font: 13px monospace; text-shadow: 0 1px 3px #000; pointer-events: none; }
 </style>
 </head>
 <body>
 <div id="overlay">
   <h1>ROOM 467</h1>
   <p><b>Click</b> to walk</p>
-  <p>WASD / arrows: move &nbsp;·&nbsp; Mouse: look &nbsp;·&nbsp; E: examine / sit at desk &nbsp;·&nbsp; Click (at desk): pick up / put down &nbsp;·&nbsp; F: take &nbsp;·&nbsp; G: drop &nbsp;·&nbsp; Tab / 1-4: satchel &nbsp;·&nbsp; Esc: release cursor &nbsp;·&nbsp; ` : debug overlay</p>
+  <p>WASD / arrows: move &nbsp;·&nbsp; Mouse: look &nbsp;·&nbsp; E: examine / sit at desk &nbsp;·&nbsp; Click (at desk): pick up / put down &nbsp;·&nbsp; &lt; &gt;: frame &nbsp;·&nbsp; Space: play &nbsp;·&nbsp; F: take &nbsp;·&nbsp; G: drop &nbsp;·&nbsp; Tab / 1-4: satchel &nbsp;·&nbsp; Esc: release cursor &nbsp;·&nbsp; ` : debug overlay</p>
 </div>
 <div id="crosshair"></div>
 <div id="hud"></div>
@@ -50,6 +54,7 @@
 <div id="toast"></div>
 <div id="satchel"></div>
 <div id="keys"></div>
+<div id="meta"></div>
 <pre id="devlog"></pre>
 
 <script>
@@ -464,22 +469,72 @@ logEvent('player', 'spawn', { ...CONFIG.spawn });
 // logged as-is, so real cel records can slot in here later.
 //   layer: background | character | effects  (what compositing will stack)
 //   condition: 0..1 placeholder for DESIGN.md §4.1
+//   scene / tone: continuity metadata, shown in the examine + satchel UI
+//   holes: optional per-cel peg-hole positions (else CEL_HOLES); a damaged
+//          cel can carry shifted holes and will register shifted (section 13)
+//   motif: which placeholder drawing to paint (defaults by layer)
 const CEL = {
   range: 2.0,              // max look distance to target a cel (metres)
   holdDistance: 0.42,      // how far in front of the eye it's held
   turnSensitivity: 0.004,  // radians per pixel of mouse movement while examining
   lerpRate: 9,             // fly-to-hand / fly-back speed
 };
+const CEL_HOLES = [[-0.08, 0.112], [0.08, 0.112]];   // standard peg holes, cel-plane metres from centre (+y = top edge)
 const CEL_DEFS = [
-  { id: 'cel-01', cut: 'C-014', layer: 'character', condition: 0.8, origin: 'stamped: Studio Hoshino (?)', foundAt: 'teal stall counter',
+  { id: 'cel-01', cut: 'C-014', scene: '12', tone: 'warm', layer: 'character', condition: 0.8, origin: 'stamped: Studio Hoshino (?)', foundAt: 'teal stall counter',
     paper: '#f3eee2', ink: '#e76f51', place: { x: -2.9, y: 1.006, z: 4.725, rx: -Math.PI / 2, ry: Math.PI / 2 } },
-  { id: 'cel-02', cut: 'C-102', layer: 'background', condition: 0.55, origin: 'no stamp', foundAt: 'violet stall counter',
+  { id: 'cel-02', cut: 'C-102', scene: '12', tone: 'cool', layer: 'background', condition: 0.55, origin: 'no stamp', foundAt: 'violet stall counter',
     paper: '#cfe3f0', ink: '#2f5d8a', place: { x: 2.9, y: 1.006, z: -7.725, rx: -Math.PI / 2, ry: -Math.PI / 2 } },
-  { id: 'cel-03', cut: 'C-0??', layer: 'effects', condition: 0.3, origin: 'handwritten: "Hoshino-Ga"', foundAt: 'mustard stall, leaning on shelf',
+  { id: 'cel-03', cut: 'C-0??', scene: '?', tone: 'warm', layer: 'effects', condition: 0.3, origin: 'handwritten: "Hoshino-Ga"', foundAt: 'mustard stall, leaning on shelf',
     paper: '#d9ecc8', ink: '#6a4c93', place: { x: 6.36, y: 0.13, z: 4.0, rx: -0.25, ry: -Math.PI / 2 } },
+  { id: 'cel-04', cut: 'C-015', scene: '12', tone: 'warm', layer: 'background', motif: 'city', condition: 0.7, origin: 'stamped: Studio Hoshino', foundAt: 'coral stall counter',
+    paper: '#f4dcc0', ink: '#8a3b2a', place: { x: -2.9, y: 1.006, z: -7.725, rx: -Math.PI / 2, ry: Math.PI / 2 } },
+  { id: 'cel-05', cut: 'C-203', scene: '31', tone: 'cool', layer: 'background', motif: 'sea', condition: 0.6, origin: 'no stamp', foundAt: 'mustard stall counter',
+    paper: '#d6e4ec', ink: '#24506e', place: { x: 2.9, y: 1.006, z: 4.725, rx: -Math.PI / 2, ry: -Math.PI / 2 } },
+  { id: 'cel-06', cut: 'C-204', scene: '31', tone: 'cool', layer: 'character', motif: 'figure', condition: 0.5, origin: 'handwritten: "H-G"', foundAt: 'crates by the desk',
+    paper: '#e8e4f4', ink: '#3a5a8a', place: { x: -5.4, y: 1.505, z: -13.2, rx: -Math.PI / 2, ry: 0 } },
 ];
+const celMeta = (p) => `${p.cut} · scene ${p.scene} · ${p.tone}`;   // the metadata line the UI shows
 
-// Procedural placeholder art: a motif per layer type, peg holes, cut number
+// Procedural placeholder art: a motif, two peg holes, cut number
+const MOTIFS = {
+  hills(g) {
+    g.fillRect(0, 170, 320, 90);
+    g.beginPath(); g.ellipse(90, 175, 120, 50, 0, Math.PI, 0); g.fill();
+    g.beginPath(); g.arc(240, 90, 28, 0, Math.PI * 2); g.stroke();
+  },
+  city(g) {
+    for (const [x, w, h] of [[0, 50, 110], [46, 40, 150], [82, 60, 90], [138, 36, 170], [170, 54, 120], [220, 40, 140], [256, 64, 100]]) g.fillRect(x, 260 - h, w, h);
+    g.beginPath(); g.arc(70, 70, 22, 0, Math.PI * 2); g.stroke();
+  },
+  sea(g, def) {
+    g.fillRect(0, 150, 320, 110);
+    g.beginPath(); g.arc(220, 80, 26, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = def.paper; g.lineWidth = 4;
+    for (const y of [185, 215, 242]) {
+      g.beginPath();
+      for (let x = 0; x <= 320; x += 8) g.lineTo(x, y + Math.sin(x / 18 + y) * 4);
+      g.stroke();
+    }
+  },
+  bust(g) {
+    g.beginPath(); g.arc(160, 110, 42, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(160, 230, 80, 60, 0, Math.PI, 0); g.fill();
+  },
+  figure(g) {   // standing, off to the right
+    g.beginPath(); g.arc(215, 72, 24, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(215, 150, 34, 58, 0, 0, Math.PI * 2); g.fill();
+    g.lineWidth = 10;
+    g.beginPath(); g.moveTo(205, 195); g.lineTo(193, 255); g.moveTo(225, 195); g.lineTo(238, 255); g.stroke();
+  },
+  burst(g) {
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2;
+      g.beginPath(); g.moveTo(160 + Math.cos(a) * 30, 135 + Math.sin(a) * 30);
+      g.lineTo(160 + Math.cos(a) * 110, 135 + Math.sin(a) * 90); g.stroke();
+    }
+  },
+};
 function makeCelTexture(def) {
   const c = document.createElement('canvas');
   c.width = 320; c.height = 260;
@@ -491,23 +546,12 @@ function makeCelTexture(def) {
   g.globalAlpha = acetate ? 0.18 : 1; g.fillRect(0, 0, 320, 260); g.globalAlpha = 1;
   if (acetate) { g.strokeStyle = def.paper; g.lineWidth = 4; g.strokeRect(2, 2, 316, 256); }
   g.fillStyle = g.strokeStyle = def.ink; g.lineWidth = 6;
-  if (def.layer === 'background') {          // horizon, hills, a sun
-    g.fillRect(0, 170, 320, 90);
-    g.beginPath(); g.ellipse(90, 175, 120, 50, 0, Math.PI, 0); g.fill();
-    g.beginPath(); g.arc(240, 90, 28, 0, Math.PI * 2); g.stroke();
-  } else if (def.layer === 'character') {    // a head-and-shoulders figure
-    g.beginPath(); g.arc(160, 110, 42, 0, Math.PI * 2); g.fill();
-    g.beginPath(); g.ellipse(160, 230, 80, 60, 0, Math.PI, 0); g.fill();
-  } else {                                   // effects: radiating burst lines
-    for (let i = 0; i < 14; i++) {
-      const a = (i / 14) * Math.PI * 2;
-      g.beginPath(); g.moveTo(160 + Math.cos(a) * 30, 135 + Math.sin(a) * 30);
-      g.lineTo(160 + Math.cos(a) * 110, 135 + Math.sin(a) * 90); g.stroke();
-    }
+  MOTIFS[def.motif || { background: 'hills', character: 'bust', effects: 'burst' }[def.layer]](g, def);
+  for (const [hx, hy] of def.holes || CEL_HOLES) {   // the two peg holes, where the data says they are
+    g.beginPath(); g.arc((hx / 0.32 + 0.5) * 320, (0.5 - hy / 0.26) * 260, 9, 0, Math.PI * 2);
+    g.fillStyle = '#1e1d1b'; g.fill();
+    g.strokeStyle = 'rgba(255, 255, 255, 0.8)'; g.lineWidth = 2; g.stroke();
   }
-  g.fillStyle = '#1e1d1b';                   // registration peg holes along the top
-  for (const x of [80, 240]) { g.beginPath(); g.ellipse(x, 18, 18, 6, 0, 0, Math.PI * 2); g.fill(); }
-  g.beginPath(); g.arc(160, 18, 8, 0, Math.PI * 2); g.fill();
   g.fillStyle = '#1e1d1b';                   // cut number, in a different corner per layer so stacks stay legible
   const [cx, cy] = { background: [14, 246], character: [14, 56], effects: [224, 246] }[def.layer];
   g.font = 'bold 22px monospace'; g.fillText(def.cut, cx, cy);
@@ -519,14 +563,14 @@ function makeCelTexture(def) {
 // Build the meshes. Phong (not Lambert) so turning a cel shows a sheen off
 // the directional light, like acetate catching a lamp.
 const cels = CEL_DEFS.map((def) => {
-  const { place, paper, ink, ...props } = def;
+  const { place, paper, ink, holes, motif, ...props } = def;
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.26),
     new THREE.MeshPhongMaterial({ map: makeCelTexture(def), side: THREE.DoubleSide, shininess: 80, specular: 0x555555,
                                   transparent: def.layer !== 'background', depthWrite: def.layer === 'background' }));
   mesh.position.set(place.x, place.y, place.z);
   mesh.rotation.set(place.rx, place.ry, 0, 'YXZ');
   mesh.receiveShadow = true;
-  mesh.userData = { cel: true, props, state: 'rest', homePos: mesh.position.clone(), homeQuat: mesh.quaternion.clone() };
+  mesh.userData = { cel: true, props, holes: holes || CEL_HOLES, state: 'rest', homePos: mesh.position.clone(), homeQuat: mesh.quaternion.clone() };
   scene.add(mesh);
   return mesh;
 });
@@ -624,16 +668,18 @@ logEvent('world', 'cels placed', CEL_DEFS.map((d) => d.id));
 // A cel mesh's userData.state, across sections 11 and 12:
 //   rest (in the world, examinable) · held · returning      <- section 11
 //   carried (in the satchel, removed from the scene)          <- here
-//   onDesk (a layer registered on the desk's lightbox)        <- here
+//   onDesk (a layer in one of the desk's frame slots)          <- here
 // Section 13 (compositing) is the only UI that places/removes desk layers;
-// it drives placeOnDesk() / takeFromDesk() below.
+// it drives placeOnDesk() / takeFromDesk() below and owns the desk layout.
 // All state lives on the meshes and the two objects below, so it persists for
 // the whole session wherever the player walks.
 // Extension points (not built yet): per-cel condition/decay would tick over
 // Satchel.items; capacity upgrades just raise Satchel.capacity.
 const SATCHEL_CAPACITY = 4;
 const Satchel = { capacity: SATCHEL_CAPACITY, items: [], selected: 0, hudOpen: false, flashUntil: 0 };
-const Desk = { layers: [], target: false, targetCel: null };   // layers: bottom -> top
+// Desk: an exposure sheet of frame slots (filled in section 13), each a layer
+// stack bottom -> top. `layers` is always the active frame's stack.
+const Desk = { slots: [], active: 0, get layers() { return this.slots[this.active]; }, target: false, targetCel: null };
 const REG = { x: DESK.x, z: DESK.z - 0.02 };   // registration point (cel centre) on the lightbox
 const LAYER_ORDER = { background: 0, character: 1, effects: 2 };
 const satchelEl = document.getElementById('satchel');
@@ -657,7 +703,7 @@ function flashHud() { Satchel.flashUntil = performance.now() + 2000; }
 function satchelChanged(message, cel, extra) {
   Satchel.selected = Math.max(0, Math.min(Satchel.selected, Satchel.items.length - 1));
   setFlag('satchelCount', Satchel.items.length);
-  setFlag('deskLayers', Desk.layers.map(idOf).join(', ') || '(empty)');
+  deskChanged();   // section 13: desk flags + continuity check
   logEvent('satchel', message, { id: idOf(cel), ...extra, contents: contents() });
   renderSatchelHud();
 }
@@ -700,21 +746,14 @@ function dropSelected() {
   cel.userData.homePos.copy(cel.position);
   cel.userData.homeQuat.copy(cel.quaternion);
   cel.userData.state = 'rest';
+  cel.scale.setScalar(1);
   scene.add(cel);
   flashHud();
   satchelChanged(`dropped ${idOf(cel)}`, cel, { at: { x: +cel.position.x.toFixed(2), z: +cel.position.z.toFixed(2) } });
 }
 
-// Desk: only carried cels can become layers. Registered layers stack exactly
-// on the pegs in layer order (background at the bottom), a few mm apart.
-// Positions are targets (userData.slot); section 13 glides cels onto them.
-function layoutDesk() {
-  Desk.layers.sort((a, b) => LAYER_ORDER[a.userData.props.layer] - LAYER_ORDER[b.userData.props.layer]);
-  Desk.layers.forEach((cel, i) => {
-    cel.userData.slot = new THREE.Vector3(REG.x, DESK.h + 0.022 + i * 0.003, REG.z);
-    cel.renderOrder = 10 + i;   // draw acetate bottom-to-top
-  });
-}
+// Desk: only carried cels can become layers; they go into the active frame.
+// (layoutDesk, which positions every frame's stack, lives in section 13.)
 function placeOnDesk(cel) {
   Satchel.items.splice(Satchel.items.indexOf(cel), 1);
   cel.userData.state = 'onDesk';
@@ -724,9 +763,9 @@ function placeOnDesk(cel) {
   satchelChanged(`placed ${idOf(cel)} at desk`, cel, { layer: cel.userData.props.layer, layerIndex: Desk.layers.indexOf(cel) });
 }
 function takeFromDesk(cel) {   // returns false if the satchel is full (cel stays registered)
-  const i = Desk.layers.indexOf(cel);
-  Desk.layers.splice(i, 1);
-  if (!addToSatchel(cel, 'desk')) { Desk.layers.splice(i, 0, cel); layoutDesk(); return false; }
+  const layers = Desk.slots.find((l) => l.includes(cel)), i = layers.indexOf(cel);
+  layers.splice(i, 1);
+  if (!addToSatchel(cel, 'desk')) { layers.splice(i, 0, cel); layoutDesk(); return false; }
   layoutDesk();
   return true;
 }
@@ -751,6 +790,13 @@ function renderSatchelHud() {
       slot.innerHTML += `<span class="dot" style="background:${def.ink}"></span><span class="cut">${def.cut}</span>`;
     }
     satchelEl.appendChild(slot);
+  }
+  const sel = selectedCel();   // continuity metadata for the selected cel
+  if (sel) {
+    const info = document.createElement('div');
+    info.className = 'info';
+    info.textContent = `${celMeta(sel.userData.props)} · ${sel.userData.props.layer}`;
+    satchelEl.appendChild(info);
   }
 }
 
@@ -801,45 +847,194 @@ setFlag('deskLayers', '(empty)');
 renderSatchelHud();
 
 // =====================================================================
-// 13. COMPOSITING — sitting at the desk, laying cels onto the pegs
+// 13. COMPOSITING — desk, registration, exposure sheet, playback, reels
 // =====================================================================
-// [E] at the desk sits you down: the camera glides to a top-down view of the
-// lightbox, carried cels are laid out on the desk's side margins (the tray),
-// and the mouse drives a hand cursor. Click picks a cel up, click again puts
-// it down; near the peg bar it's pulled in and snaps into register.
-// No confirm step: once a background + at least one other layer are
-// registered and the player stops touching the stack, the reel goes live on
-// its own with a single audio cue (DESIGN.md §2, step 5).
+// Sitting down: [E] at the desk. The camera glides to a top-down view of the
+// lightbox, carried cels are laid on the desk margins (the tray) and the
+// mouse drives a hand cursor. Click picks a cel up, click again lets go.
+//
+// Registration: every cel has two peg holes at fixed spots on its plane
+// (userData.holes, painted on its texture). Letting go near the peg bar snaps
+// the cel so its hole midpoint sits on the pegs' midpoint and the line
+// through its holes lies along the bar. It's computed from the holes, so a
+// damaged cel with shifted holes would register shifted/skewed, and
+// registerCel() is where a "won't register" failure can go later. For now
+// registration always succeeds.
+//
+// Exposure sheet: FRAME_SLOTS frames in a row along the front of the
+// lightbox, each its own stack (background / character / effects). The
+// active frame sits on the pegs at full size; the rest wait as thumbnails.
+// [<] [>] (or arrow keys, or clicking a thumbnail) changes the active frame.
+// Carrying a registered cel to another frame (switch while holding it, or
+// let go over a thumbnail) moves it there.
+//
+// Playback: [Space] flips from the first to the last filled frame at
+// FLIP_FPS, looping. An empty frame in between plays as static: a visible
+// hole in the sequence, not an error.
+//
+// Continuity: cels carry a scene number and tone tag. Nothing stops a
+// mismatch; neighbouring filled frames that disagree are only logged
+// ("continuity"), never shown in-world.
+//
+// Reels: no confirm step. When at least REEL_MIN_FRAMES frames each hold a
+// background and the player stops touching the sheet for a moment, the reel
+// goes live once, with a single audio cue (DESIGN.md §2, step 5).
+const FRAME_SLOTS = 4;       // exposure-sheet length (3-5)
+const FLIP_FPS = 4;          // playback rate, frames per second
+const REEL_MIN_FRAMES = 2;   // frames with a background needed for a complete reel
 const COMPOSE = {
   handSpeed: 0.0011,   // metres of hand travel per pixel of mouse movement
   follow: 16,          // how tightly a held cel trails the hand (higher = snappier)
   lift: 0.05,          // how high a held cel floats above the desk
-  magnet: 0.1,         // within this of the pegs, a held cel is drawn toward register
+  magnet: 0.1,         // within this of its registered spot, a held cel is drawn in
   snap: 0.05,          // within this, letting go snaps it into register
-  settle: 1.5,         // seconds hands-off before a valid stack goes live
+  settle: 1.5,         // seconds hands-off before a complete reel goes live
   camBlend: 5,         // sit-down / stand-up camera speed
 };
 const Compose = { active: false, t: 0, cursor: new THREE.Vector3(), held: null, vel: new THREE.Vector3() };
-const Reel = { completed: new Set(), pendingSig: '', idle: 0, pulse: 0 };
+const Reel = { completed: new Set(), pendingSig: '', idle: 0, pulse: 0, wasComplete: false };
+const Play = { active: false, seq: [], i: 0, t: 0 };
+const Continuity = { open: new Set() };   // mismatches currently on the sheet (already logged)
+for (let i = 0; i < FRAME_SLOTS; i++) Desk.slots.push([]);
 
 // Seated camera: above the lightbox, tilted a little toward the chair side
 const deskCamPos = new THREE.Vector3(DESK.x, DESK.h + 1.12, DESK.z + 0.28);
 const deskCamQuat = new THREE.Quaternion().setFromRotationMatrix(
   new THREE.Matrix4().lookAt(deskCamPos, new THREE.Vector3(DESK.x, DESK.h, DESK.z + 0.02), new THREE.Vector3(0, 1, 0)));
 const FLAT = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0, 'YXZ'));   // face-up, top edge north
+const UP = new THREE.Vector3(0, 1, 0);
 const _hold = new THREE.Vector3(), _prev = new THREE.Vector3(), _tilt = new THREE.Quaternion(), _te = new THREE.Euler();
 const PULSE_COLOR = new THREE.Color(0xfff2c8);
 
-// Peg bar: three pegs lined up with the holes drawn at the top of every cel
+// --- Peg bar: two pegs, spaced and placed to match the standard cel holes
+const PEG = { x: REG.x, z: REG.z - CEL_HOLES[0][1], spacing: CEL_HOLES[1][0] - CEL_HOLES[0][0] };
 const pegMat = new THREE.MeshLambertMaterial({ color: 0x3a3632, emissive: 0x000000 });
-{
-  const pegZ = REG.z - 0.13 + 0.018;   // holes are 18px (of 260) below a cel's top edge
-  addBox(0.3, 0.004, 0.03, REG.x, DESK.h + 0.02, pegZ, 0x3a3632, { shadow: false });
-  for (const dx of [-0.08, 0, 0.08]) {
-    addCylinder(0.006, 0.006, 0.035, REG.x + dx, DESK.h + 0.02, pegZ, 0x3a3632, { shadow: false, segments: 8 }).material = pegMat;
-  }
+addBox(0.3, 0.004, 0.03, PEG.x, DESK.h + 0.02, PEG.z, 0x3a3632, { shadow: false });
+for (const dx of [-PEG.spacing / 2, PEG.spacing / 2]) {
+  addCylinder(0.006, 0.006, 0.035, PEG.x + dx, DESK.h + 0.02, PEG.z, 0x3a3632, { shadow: false, segments: 8 }).material = pegMat;
 }
-// Hand cursor: a ring hovering over the desk (never hit by look raycasts)
+
+// --- Registration: the pose that puts a cel's two holes onto the two pegs
+function registerTransform(cel) {
+  const [[x1, y1], [x2, y2]] = cel.userData.holes;
+  // Turn the cel so its hole line runs along the bar (+X), face-up...
+  const quat = new THREE.Quaternion().setFromAxisAngle(UP, Math.atan2(-(y2 - y1), x2 - x1)).multiply(FLAT);
+  // ...then shift it so the midpoint between its holes lands between the pegs
+  const mid = new THREE.Vector3((x1 + x2) / 2, (y1 + y2) / 2, 0).applyQuaternion(quat);
+  return {
+    pos: new THREE.Vector3(PEG.x - mid.x, 0, PEG.z - mid.z), quat,
+    spacingError: Math.abs(Math.hypot(x2 - x1, y2 - y1) - PEG.spacing),   // 0 for an undamaged cel
+  };
+}
+function registerCel(cel, frame, extra) {
+  const r = registerTransform(cel);
+  const snapped = true;   // later: false for damaged cels (e.g. spacingError over a tolerance)
+  logEvent('register', `${idOf(cel)} -> frame ${frame + 1}`,
+    { id: idOf(cel), frame: frame + 1, snapped, holeSpacingError: +r.spacingError.toFixed(4), ...extra });
+  return snapped;
+}
+
+// --- Exposure sheet: one marker per frame along the front of the lightbox
+const THUMB = { scale: 0.3, pitch: 0.14, z: DESK.z + 0.27 };
+const markerPos = (s) => ({ x: DESK.x + (s - (FRAME_SLOTS - 1) / 2) * THUMB.pitch, z: THUMB.z });
+const markers = Desk.slots.map((_, s) => {
+  const c = document.createElement('canvas');
+  c.width = 110; c.height = 120;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(0, 0, 0, 0.35)'; g.fillRect(0, 0, 110, 92);
+  g.strokeStyle = '#fff'; g.lineWidth = 6; g.strokeRect(3, 3, 104, 86);
+  g.fillStyle = '#fff'; g.font = 'bold 26px monospace'; g.textAlign = 'center'; g.fillText(String(s + 1), 55, 116);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.12),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
+  const p = markerPos(s);
+  m.position.set(p.x, DESK.h + 0.0205, p.z);
+  m.quaternion.copy(FLAT);
+  m.renderOrder = 8;
+  m.raycast = () => {};
+  scene.add(m);
+  return m;
+});
+const thumbCentre = (s) => { const p = markerPos(s); return { x: p.x, z: p.z - 0.014 }; };   // the frame box, above the number
+
+// Static card: what an empty frame looks like during playback
+const staticCanvas = document.createElement('canvas');
+staticCanvas.width = 80; staticCanvas.height = 65;
+const staticTex = new THREE.CanvasTexture(staticCanvas);
+staticTex.magFilter = THREE.NearestFilter;
+const staticCard = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.26), new THREE.MeshBasicMaterial({ map: staticTex }));
+staticCard.position.set(REG.x, DESK.h + 0.04, REG.z);
+staticCard.quaternion.copy(FLAT);
+staticCard.renderOrder = 60;
+staticCard.visible = false;
+staticCard.raycast = () => {};
+scene.add(staticCard);
+function refreshStatic() {
+  const g = staticCanvas.getContext('2d'), img = g.createImageData(80, 65);
+  for (let i = 0; i < img.data.length; i += 4) {
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = 40 + Math.random() * 150;
+    img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  staticTex.needsUpdate = true;
+}
+
+// Every frame's stack gets a target pose (userData.slot/slotQuat/slotScale):
+// the active frame registered on the pegs, the others as thumbnails.
+// Cels glide there in updateCompose(); teleport=true jumps (playback).
+function layoutDesk(teleport) {
+  Desk.slots.forEach((layers, s) => {
+    layers.sort((a, b) => LAYER_ORDER[a.userData.props.layer] - LAYER_ORDER[b.userData.props.layer]);
+    layers.forEach((cel, i) => {
+      const u = cel.userData;
+      if (s === Desk.active) {
+        const r = registerTransform(cel);
+        u.slot = r.pos.setY(DESK.h + 0.026 + i * 0.003);   // just above the peg bar (top at +0.024)
+        u.slotQuat = r.quat;
+        u.slotScale = 1;
+      } else {
+        const t = thumbCentre(s);
+        u.slot = new THREE.Vector3(t.x, DESK.h + 0.022 + i * 0.001, t.z); u.slotQuat = FLAT; u.slotScale = THUMB.scale;
+      }
+      cel.renderOrder = 10 + i;   // draw acetate bottom-to-top
+      if (teleport && !(Compose.held && Compose.held.cel === cel)) {
+        cel.position.copy(u.slot); cel.quaternion.copy(u.slotQuat); cel.scale.setScalar(u.slotScale);
+      }
+    });
+  });
+  markers.forEach((m, s) => m.material.color.setHex(s === Desk.active ? 0xffc86b : 0x8a857c));
+}
+const frameSummary = () => Desk.slots.map((l, s) => `${s + 1}:${l.map(idOf).join('+') || '-'}`).join('  ');
+
+// Called on every desk change (via satchelChanged, or frame-to-frame moves)
+function deskChanged() {
+  setFlag('deskLayers', frameSummary());
+  checkContinuity();
+}
+
+// --- Continuity: log (never show) mismatches between neighbouring filled frames
+function frameKey(layers) {   // a frame's scene/tone come from its background (else its bottom layer)
+  const c = layers.find((l) => l.userData.props.layer === 'background') || layers[0];
+  return c && { scene: c.userData.props.scene, tone: c.userData.props.tone, cels: layers.map(idOf) };
+}
+function checkContinuity() {
+  const now = new Set();
+  for (let s = 0; s < FRAME_SLOTS - 1; s++) {
+    const a = frameKey(Desk.slots[s]), b = frameKey(Desk.slots[s + 1]);
+    if (!a || !b) continue;   // only frames side by side that are both filled
+    for (const field of ['scene', 'tone']) {
+      if (a[field] === b[field]) continue;
+      const type = `${field}-mismatch`, key = `${type}|${s}|${a.cels}|${b.cels}`;
+      now.add(key);
+      if (Continuity.open.has(key)) continue;   // still there from before: already logged
+      incFlag('continuity.mismatchEvents');
+      logEvent('continuity', type, { frames: [s + 1, s + 2], [field]: [a[field], b[field]], cels: [a.cels, b.cels] });
+    }
+  }
+  Continuity.open = now;
+  setFlag('continuity.openMismatches', now.size);
+}
+
+// --- Hand cursor: a ring hovering over the desk (never hit by look raycasts)
 const handCursor = new THREE.Mesh(new THREE.RingGeometry(0.01, 0.016, 24),
   new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false }));
 handCursor.rotation.x = -Math.PI / 2;
@@ -848,15 +1043,16 @@ handCursor.visible = false;
 handCursor.raycast = () => {};
 scene.add(handCursor);
 
-// Tray: satchel cels laid on the desk's side margins while seated
+// --- Tray: satchel cels laid on the desk's side margins while seated
 const TRAY = [[-0.93, -0.08], [-0.93, 0.26], [0.93, -0.08], [0.93, 0.26]];   // (x, z) offsets from the desk centre
 function layoutTray(teleport) {
   Satchel.items.forEach((cel, i) => {
-    const [dx, dz] = TRAY[i % TRAY.length];
-    cel.userData.slot = new THREE.Vector3(DESK.x + dx, DESK.h + 0.004 + Math.floor(i / TRAY.length) * 0.003, DESK.z + dz);
+    const [dx, dz] = TRAY[i % TRAY.length], u = cel.userData;
+    u.slot = new THREE.Vector3(DESK.x + dx, DESK.h + 0.004 + Math.floor(i / TRAY.length) * 0.003, DESK.z + dz);
+    u.slotQuat = FLAT; u.slotScale = 1;
     cel.renderOrder = 5;
     if (!cel.parent) scene.add(cel);
-    if (teleport) { cel.position.copy(cel.userData.slot); cel.quaternion.copy(FLAT); }
+    if (teleport) { cel.position.copy(u.slot); cel.quaternion.copy(FLAT); cel.scale.setScalar(1); }
   });
 }
 
@@ -893,59 +1089,114 @@ function playReelCue() {   // a falling, wobbling tone: "tape warp" until the re
 // --- Sitting down / standing up
 function enterCompose() {
   Compose.active = true;
-  Compose.cursor.set(REG.x, 0, REG.z + 0.3);   // hand starts just in front of the pegs
+  Compose.cursor.set(REG.x, 0, REG.z + 0.18);   // hand starts just below the active frame
   player.vx = player.vz = 0;
   layoutTray(true);
+  layoutDesk(false);
   setFlag('desk.seated', true);
-  logEvent('desk', 'sat down', { satchel: contents(), deskLayers: Desk.layers.map(idOf) });
+  logEvent('desk', 'sat down', { satchel: contents(), frames: frameSummary() });
 }
 function exitCompose(reason) {
+  if (Play.active) stopPlay('stood up');
   if (Compose.held) releaseHeld();   // whatever's in hand resolves as if let go
   Compose.active = false;
-  for (const cel of Satchel.items) scene.remove(cel);   // tray cels go back into the satchel
+  for (const cel of Satchel.items) { scene.remove(cel); cel.scale.setScalar(1); }   // tray cels back into the satchel
   handCursor.visible = false;
   setFlag('desk.seated', false);
-  logEvent('desk', 'stood up', { reason, deskLayers: Desk.layers.map(idOf) });
+  logEvent('desk', 'stood up', { reason, frames: frameSummary() });
+}
+
+// --- Frames and playback
+function selectFrame(s) {
+  s = Math.max(0, Math.min(FRAME_SLOTS - 1, s));
+  if (Play.active) stopPlay('frame change');
+  if (s === Desk.active) return;
+  Desk.active = s;
+  layoutDesk(false);
+  setFlag('desk.frame', s + 1);
+}
+function showFrame(s) {   // playback: cut straight to frame s (no glide)
+  Desk.active = s;
+  layoutDesk(true);
+  staticCard.visible = Desk.slots[s].length === 0;
+  if (staticCard.visible) refreshStatic();
+}
+function startPlay() {
+  const filled = Desk.slots.map((l, s) => (l.length ? s : -1)).filter((s) => s >= 0);
+  if (!filled.length) { showToast('Nothing on the sheet to play.'); return; }
+  if (Compose.held) releaseHeld();
+  Play.seq = [];
+  for (let s = filled[0]; s <= filled[filled.length - 1]; s++) Play.seq.push(s);   // interior gaps included
+  Object.assign(Play, { active: true, i: 0, t: 0 });
+  showFrame(Play.seq[0]);
+  setFlag('desk.playing', true);
+  logEvent('desk', 'play', { frames: Play.seq.map((s) => s + 1), gaps: Play.seq.filter((s) => !Desk.slots[s].length).map((s) => s + 1) });
+}
+function stopPlay(reason) {
+  Play.active = false;
+  staticCard.visible = false;
+  layoutDesk(false);
+  setFlag('desk.playing', false);
+  setFlag('desk.frame', Desk.active + 1);
+  logEvent('desk', 'stop', { reason, frame: Desk.active + 1 });
 }
 
 // --- Picking up and letting go
 const isOver = (cel) => Math.abs(Compose.cursor.x - cel.position.x) < 0.16 && Math.abs(Compose.cursor.z - cel.position.z) < 0.13;
-function celUnderHand() {   // topmost first: registered stack top-down, then the tray
+function celUnderHand() {   // topmost first: active frame's stack top-down, then the tray
   return [...Desk.layers].reverse().find(isOver) || Satchel.items.find(isOver);
+}
+function markerUnderHand() {
+  return markers.findIndex((m) => Math.abs(Compose.cursor.x - m.position.x) < 0.06 && Math.abs(Compose.cursor.z - m.position.z) < 0.06);
 }
 function grab(cel) {
   Compose.held = {
     cel, from: cel.userData.state === 'onDesk' ? 'desk' : 'tray',
+    fromFrame: Desk.slots.findIndex((l) => l.includes(cel)),
+    reg: registerTransform(cel),   // where this cel's holes meet the pegs
     offset: new THREE.Vector3(cel.position.x - Compose.cursor.x, 0, cel.position.z - Compose.cursor.z),   // no jump on pickup
   };
   cel.renderOrder = 50;
   Reel.idle = 0;
 }
-// Judged on where the hand is taking the cel, not where the trailing cel is
-// right now, so letting go mid-motion still lands where the player aimed.
-// Where the hand is taking the held cel: hand + grab offset, drawn in by the pegs
+// Where the hand is taking the held cel: hand + grab offset, drawn toward its
+// registered spot when close. Snapping is judged on this aim rather than the
+// trailing cel, so letting go mid-motion lands where the player aimed.
 function holdTarget(out) {
-  const { offset } = Compose.held;
+  const { offset, reg } = Compose.held;
   out.set(Compose.cursor.x + offset.x, DESK.h + COMPOSE.lift, Compose.cursor.z + offset.z);
-  const d = Math.hypot(out.x - REG.x, out.z - REG.z);
+  const d = Math.hypot(out.x - reg.pos.x, out.z - reg.pos.z);
   const pull = d < COMPOSE.magnet ? (1 - d / COMPOSE.magnet) ** 2 * 0.85 : 0;
-  out.x += (REG.x - out.x) * pull;
-  out.z += (REG.z - out.z) * pull;
+  out.x += (reg.pos.x - out.x) * pull;
+  out.z += (reg.pos.z - out.z) * pull;
   out.y -= pull * 0.025;   // sinks toward the pegs as it's drawn in
   return out;
 }
 const _aim = new THREE.Vector3();
 function heldInRegister() {
   holdTarget(_aim);
-  return Math.hypot(_aim.x - REG.x, _aim.z - REG.z) < COMPOSE.snap;
+  return Math.hypot(_aim.x - Compose.held.reg.pos.x, _aim.z - Compose.held.reg.pos.z) < COMPOSE.snap;
 }
 function releaseHeld() {
-  const { cel, from } = Compose.held;
-  const inRegister = heldInRegister();
+  const { cel, from, fromFrame } = Compose.held;
+  let inRegister = heldInRegister();
+  const overThumb = markerUnderHand();
+  if (!inRegister && overThumb >= 0) { Desk.active = overThumb; setFlag('desk.frame', overThumb + 1); inRegister = true; }   // let go on a thumbnail: into that frame
   Compose.held = null;
   pegMat.emissive.setHex(0x000000);
   if (inRegister) {
-    if (from === 'tray') { placeOnDesk(cel); layoutTray(false); } else layoutDesk();
+    if (from === 'tray') {
+      placeOnDesk(cel);
+      layoutTray(false);
+      registerCel(cel, Desk.active);
+    } else if (fromFrame !== Desk.active) {   // carried across the sheet: moves to this frame
+      const old = Desk.slots[fromFrame];
+      old.splice(old.indexOf(cel), 1);
+      Desk.layers.push(cel);
+      layoutDesk(false);
+      deskChanged();
+      registerCel(cel, Desk.active, { movedFrom: fromFrame + 1 });
+    } else layoutDesk(false);
     playTick();
   } else if (from === 'desk') {
     if (takeFromDesk(cel)) layoutTray(false);   // full satchel: it glides back onto the pegs
@@ -954,9 +1205,14 @@ function releaseHeld() {
 }
 
 document.addEventListener('keydown', (e) => {
+  if (Compose.active && e.code === 'Space') e.preventDefault();
   if (!locked || e.repeat) return;
-  if (!Compose.active && e.code === 'KeyE' && !Examine.active && (Desk.target || Desk.targetCel)) enterCompose();
-  else if (Compose.active && (e.code === 'KeyE' || e.code === 'Escape')) exitCompose('key');
+  if (!Compose.active) {
+    if (e.code === 'KeyE' && !Examine.active && (Desk.target || Desk.targetCel)) enterCompose();
+  } else if (e.code === 'KeyE' || e.code === 'Escape') exitCompose('key');
+  else if (e.code === 'ArrowLeft' || e.code === 'Comma') selectFrame(Desk.active - 1);
+  else if (e.code === 'ArrowRight' || e.code === 'Period') selectFrame(Desk.active + 1);
+  else if (e.code === 'Space') (Play.active ? stopPlay('key') : startPlay());
 });
 document.addEventListener('pointerlockchange', () => { if (!locked && Compose.active) exitCompose('pointer released'); });
 document.addEventListener('mousemove', (e) => {
@@ -967,54 +1223,72 @@ document.addEventListener('mousemove', (e) => {
 });
 document.addEventListener('mousedown', (e) => {
   if (!locked || !Compose.active || e.button !== 0 || Compose.t < 0.6) return;   // ignore clicks mid sit-down
-  if (Compose.held) releaseHeld();
-  else { const cel = celUnderHand(); if (cel) grab(cel); }
+  if (Play.active) { stopPlay('click'); return; }
+  if (Compose.held) { releaseHeld(); return; }
+  const cel = celUnderHand();
+  if (cel) grab(cel);
+  else if (markerUnderHand() >= 0) selectFrame(markerUnderHand());
 });
 
-// --- Reel: goes live on its own once a valid stack is left alone
+// --- Reel: complete = REEL_MIN_FRAMES frames with a background; goes live once, hands-off
 function goLive(sig) {
   Reel.completed.add(sig);
+  Reel.wasComplete = true;
   incFlag('reelsCompleted');
   setFlag('lastReel', sig);
-  const layers = Desk.layers.map((c) => {
-    const p = c.userData.props;
-    return { id: p.id, cut: p.cut, layer: p.layer, origin: p.origin };
+  const frames = Desk.slots.map((layers, s) => ({
+    frame: s + 1,
+    layers: layers.map((c) => { const p = c.userData.props; return { id: p.id, cut: p.cut, layer: p.layer, scene: p.scene, tone: p.tone }; }),
+  }));
+  logEvent('reel', `reel live #${getFlag('reelsCompleted')}`, {
+    filledFrames: frames.filter((f) => f.layers.length).map((f) => f.frame),
+    blankFrames: frames.filter((f) => !f.layers.length).map((f) => f.frame),
+    frames, signature: sig,
   });
-  logEvent('reel', `reel live #${getFlag('reelsCompleted')}`, { layers, signature: sig });
   playReelCue();
   Reel.pulse = 1;
 }
 function updateReel(dt) {
-  const sig = Desk.layers.map(idOf).sort().join('+');
+  const sig = frameSummary();
   if (sig !== Reel.pendingSig) { Reel.pendingSig = sig; Reel.idle = 0; }
-  const types = Desk.layers.map((c) => c.userData.props.layer);
-  const valid = types.includes('background') && types.length >= 2;
-  if (!valid || Compose.held || Reel.completed.has(sig)) Reel.idle = 0;   // each distinct stack goes live once
+  const withBackground = Desk.slots.filter((l) => l.some((c) => c.userData.props.layer === 'background')).length;
+  if (withBackground < REEL_MIN_FRAMES) { Reel.wasComplete = false; Reel.idle = 0; }   // broken: a later completion counts again
+  else if (Reel.wasComplete || Compose.held || Reel.completed.has(sig)) Reel.idle = 0;   // only on first reaching complete
   else if ((Reel.idle += dt) >= COMPOSE.settle) goLive(sig);
   Reel.pulse = Math.max(0, Reel.pulse - dt * 0.7);   // lightbox swells, then fades back
   lightbox.material.emissive.setHex(0x5a5448).lerp(PULSE_COLOR, Reel.pulse);
 }
 
-// --- Per frame (runs seated or not: desk cels glide home, reels settle, camera blends)
+// --- Per frame (runs seated or not: desk cels glide home, playback, reels, camera)
 function updateCompose(dt) {
   const k = 1 - Math.exp(-12 * dt);
-  for (const cel of cels) {   // glide desk + tray cels onto their slots
+  for (const cel of cels) {   // glide desk + tray cels onto their target poses
     const u = cel.userData;
     if (!u.slot || (Compose.held && cel === Compose.held.cel)) continue;
     if (u.state !== 'onDesk' && !(u.state === 'carried' && cel.parent)) continue;
     cel.position.lerp(u.slot, k);
-    cel.quaternion.slerp(FLAT, k);
+    cel.quaternion.slerp(u.slotQuat || FLAT, k);
+    cel.scale.setScalar(cel.scale.x + ((u.slotScale || 1) - cel.scale.x) * k);
   }
   if (Compose.held) {   // held cel trails the hand, drawn in by the pegs, tilting with motion
-    const { cel } = Compose.held;
+    const { cel, reg } = Compose.held;
     holdTarget(_hold);
     _prev.copy(cel.position);
     cel.position.lerp(_hold, 1 - Math.exp(-COMPOSE.follow * dt));
+    cel.scale.setScalar(cel.scale.x + (1 - cel.scale.x) * k);
     Compose.vel.lerp(_prev.subVectors(cel.position, _prev).divideScalar(Math.max(dt, 1e-3)), 0.25);
     const clampT = (v) => Math.max(-0.3, Math.min(0.3, v));
     _tilt.setFromEuler(_te.set(clampT(Compose.vel.z * 0.5), 0, clampT(-Compose.vel.x * 0.5)));
-    cel.quaternion.slerp(_tilt.multiply(FLAT), k);
+    cel.quaternion.slerp(_tilt.multiply(reg.quat), k);
     pegMat.emissive.setHex(heldInRegister() ? 0x8a6a20 : 0x000000);   // pegs warm up: "let go now"
+  }
+  if (Play.active) {   // flipbook: fixed-rate cuts, static on empty frames
+    Play.t += dt;
+    if (Play.t >= 1 / FLIP_FPS) {
+      Play.t -= 1 / FLIP_FPS;
+      Play.i = (Play.i + 1) % Play.seq.length;
+      showFrame(Play.seq[Play.i]);
+    } else if (staticCard.visible) refreshStatic();
   }
   updateReel(dt);
 
@@ -1027,28 +1301,50 @@ function updateCompose(dt) {
     camera.quaternion.slerp(deskCamQuat, e);
     crosshairEl.style.display = 'none';
   }
-  handCursor.visible = Compose.active && Compose.t > 0.6;
+  handCursor.visible = Compose.active && Compose.t > 0.6 && !Play.active;
   if (handCursor.visible) {
     handCursor.position.set(Compose.cursor.x, DESK.h + 0.08, Compose.cursor.z);
-    handCursor.material.color.setHex(Compose.held ? 0xffc86b : celUnderHand() ? 0xfff2c8 : 0xffffff);
+    const hover = celUnderHand() || markerUnderHand() >= 0;
+    handCursor.material.color.setHex(Compose.held ? 0xffc86b : hover ? 0xfff2c8 : 0xffffff);
     handCursor.scale.setScalar(Compose.held ? 1.4 : 1);
   }
 }
 setFlag('reelsCompleted', 0);
 setFlag('desk.seated', false);
+setFlag('desk.frame', 1);
+setFlag('desk.playing', false);
+setFlag('continuity.mismatchEvents', 0);
+deskChanged();
+layoutDesk(true);
 
 // =====================================================================
-// 14. KEY HINTS — always-on reminder of what the keys do right now
+// 14. KEY HINTS + INFO LINE — what the keys do now, and what you're looking at
 // =====================================================================
 const keysEl = document.getElementById('keys');
 let lastHints = null;
 function updateKeyHints() {
   const n = Satchel.capacity;
   const h = !locked ? ''   // the click-to-walk screen lists everything
-    : Compose.active ? '<b>Mouse</b> move hand · <b>Click</b> pick up / put down · <b>E</b> / <b>Esc</b> stand up'
+    : Compose.active ? '<b>Mouse</b> hand · <b>Click</b> pick up / put down · <b>&lt; &gt;</b> or <b>← →</b> frame · <b>Space</b> play / stop · <b>E</b> stand up'
     : Examine.active ? '<b>Mouse</b> turn · <b>E</b> put back · <b>F</b> take into satchel'
     : `<b>WASD</b> move · <b>E</b> examine / sit · <b>Tab</b> satchel · <b>1-${n}</b> choose · <b>G</b> drop · <b>\`</b> debug`;
   if (h !== lastHints) { keysEl.innerHTML = h; lastHints = h; }
+  updateInfoLine();
+}
+// Continuity metadata for the cel in hand (examine) or under the hand (desk);
+// at the desk with nothing under the hand, what's in the current frame.
+const metaEl = document.getElementById('meta');
+function updateInfoLine() {
+  let t = '';
+  if (locked && Examine.active) t = celMeta(Examine.cel.userData.props);
+  else if (locked && Compose.active) {
+    const cel = (Compose.held && Compose.held.cel) || (!Play.active && celUnderHand());
+    const m = cel || Play.active ? -1 : markerUnderHand();
+    const s = m >= 0 ? m : Desk.active;
+    t = cel ? `${celMeta(cel.userData.props)} · ${cel.userData.props.layer}`
+      : `${Play.active ? '▶ ' : ''}Frame ${s + 1} of ${FRAME_SLOTS}: ${Desk.slots[s].map((c) => c.userData.props.cut).join(' + ') || 'empty'}`;
+  }
+  if (metaEl.textContent !== t) metaEl.textContent = t;
 }
 
 // =====================================================================
