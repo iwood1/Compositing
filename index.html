@@ -43,6 +43,11 @@
               border-radius: 4px; pointer-events: none; display: none; }
   #dialogue.show { display: block; }
   #dialogue b { color: #e9c46a; font-weight: 600; }
+  #reelbanner { position: fixed; left: 50%; top: 16%; transform: translateX(-50%); padding: 10px 22px; text-align: center;
+                background: rgba(20, 19, 17, 0.75); border: 2px dashed #ffe7a3; color: #ffe7a3; font: bold 28px monospace;
+                letter-spacing: 0.12em; pointer-events: none; display: none; z-index: 5; }
+  #reelbanner small { display: block; margin-top: 4px; font: 13px monospace; letter-spacing: 0; color: #f3eee2; }
+  #reelbanner.show { display: block; }
   #meta { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); white-space: nowrap; color: #f3eee2;
           font: 13px monospace; text-shadow: 0 1px 3px #000; pointer-events: none; }
 </style>
@@ -51,7 +56,7 @@
 <div id="overlay">
   <h1>ROOM 467</h1>
   <p><b>Click</b> to walk</p>
-  <p>WASD / arrows: move &nbsp;·&nbsp; Mouse: look &nbsp;·&nbsp; E: examine / sit at desk &nbsp;·&nbsp; Click (at desk): pick up / put down &nbsp;·&nbsp; &lt; &gt;: frame &nbsp;·&nbsp; Space: play &nbsp;·&nbsp; F: take &nbsp;·&nbsp; G: drop &nbsp;·&nbsp; Tab / 1-4: satchel &nbsp;·&nbsp; Esc: release cursor &nbsp;·&nbsp; ` : debug overlay</p>
+  <p>WASD / arrows: move &nbsp;·&nbsp; Mouse: look &nbsp;·&nbsp; E: examine / sit at desk &nbsp;·&nbsp; Click (at desk): pick up / put down &nbsp;·&nbsp; &lt; &gt;: frame &nbsp;·&nbsp; ↑ ↓: folder &nbsp;·&nbsp; Space: play &nbsp;·&nbsp; F: take &nbsp;·&nbsp; G: drop &nbsp;·&nbsp; Tab / 1-4: satchel &nbsp;·&nbsp; Esc: release cursor &nbsp;·&nbsp; ` : debug overlay</p>
 </div>
 <div id="crosshair"></div>
 <div id="hud"></div>
@@ -61,6 +66,7 @@
 <div id="keys"></div>
 <div id="meta"></div>
 <div id="dialogue"></div>
+<div id="reelbanner"></div>
 <pre id="devlog"></pre>
 
 <script>
@@ -114,7 +120,8 @@ function renderDevLog() {
   const el = document.getElementById('devlog');
   el.textContent =
     `FLAGS (${flagLines.length})\n${flagLines.join('\n') || '  (none)'}\n\n` +
-    `EVENTS (last ${eventLines.length} of ${DevLog.events.length})\n${eventLines.join('\n') || '  (none)'}`;
+    `EVENTS (last ${eventLines.length} of ${DevLog.events.length})\n${eventLines.join('\n') || '  (none)'}` +
+    (DevLog.footer ? `\n\n${DevLog.footer}` : '');
   el.scrollTop = el.scrollHeight;   // if it overflows, keep the newest events in view
 }
 setInterval(renderDevLog, 100);
@@ -480,6 +487,10 @@ logEvent('player', 'spawn', { ...CONFIG.spawn });
 //   holes: optional per-cel peg-hole positions (else CEL_HOLES); a damaged
 //          cel can carry shifted holes and will register shifted (section 13)
 //   motif: which placeholder drawing to paint (defaults by layer)
+//   sceneId: derived from scene (sceneIdOf) when spawned; the desk's Scene
+//            Library groups by it. (cut / scene are the cut and scene numbers.)
+//   More cels arrive at runtime from the shipment crate (section 13), built
+//   by the same spawnCel().
 const CEL = {
   range: 2.0,              // max look distance to target a cel (metres)
   holdDistance: 0.42,      // how far in front of the eye it's held
@@ -499,7 +510,7 @@ const CEL_DEFS = [
   { id: 'cel-05', resonance: 'care', cut: 'C-203', scene: '31', tone: 'cool', layer: 'background', motif: 'sea', condition: 0.6, origin: 'no stamp', foundAt: 'mustard stall counter',
     paper: '#d6e4ec', ink: '#24506e', place: { x: 2.9, y: 1.006, z: 4.725, rx: -Math.PI / 2, ry: -Math.PI / 2 } },
   { id: 'cel-06', resonance: 'violence', cut: 'C-204', scene: '31', tone: 'cool', layer: 'character', motif: 'figure', condition: 0.5, origin: 'handwritten: "H-G"', foundAt: 'crates by the desk',
-    paper: '#e8e4f4', ink: '#3a5a8a', place: { x: -5.4, y: 1.505, z: -13.2, rx: -Math.PI / 2, ry: 0 } },
+    paper: '#e8e4f4', ink: '#3a5a8a', place: { x: -5.4, y: 1.405, z: -13.2, rx: -Math.PI / 2, ry: 0 } },
 ];
 const celMeta = (p) => `${p.cut} · scene ${p.scene} · ${p.tone}`;   // the metadata line the UI shows
 
@@ -553,7 +564,9 @@ function makeCelTexture(def) {
   g.globalAlpha = acetate ? 0.18 : 1; g.fillRect(0, 0, 320, 260); g.globalAlpha = 1;
   if (acetate) { g.strokeStyle = def.paper; g.lineWidth = 4; g.strokeRect(2, 2, 316, 256); }
   g.fillStyle = g.strokeStyle = def.ink; g.lineWidth = 6;
+  g.save(); g.translate(def.dx || 0, 0);   // dx: pose offset, so consecutive cuts in a matched lot move
   MOTIFS[def.motif || { background: 'hills', character: 'bust', effects: 'burst' }[def.layer]](g, def);
+  g.restore();
   for (const [hx, hy] of def.holes || CEL_HOLES) {   // the two peg holes, where the data says they are
     g.beginPath(); g.arc((hx / 0.32 + 0.5) * 320, (0.5 - hy / 0.26) * 260, 9, 0, Math.PI * 2);
     g.fillStyle = '#1e1d1b'; g.fill();
@@ -569,8 +582,11 @@ function makeCelTexture(def) {
 
 // Build the meshes. Phong (not Lambert) so turning a cel shows a sheen off
 // the directional light, like acetate catching a lamp.
-const cels = CEL_DEFS.map((def) => {
-  const { place, paper, ink, holes, motif, ...props } = def;
+const sceneIdOf = (sceneNumber) => `sc-${sceneNumber === '?' ? 'unknown' : sceneNumber}`;
+const cels = [];   // every live cel mesh; consumed cels are removed (section 13)
+function spawnCel(def) {
+  const { place, paper, ink, holes, motif, dx, ...props } = def;
+  props.sceneId = sceneIdOf(props.scene);
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.26),
     new THREE.MeshPhongMaterial({ map: makeCelTexture(def), side: THREE.DoubleSide, shininess: 80, specular: 0x555555,
                                   transparent: def.layer !== 'background', depthWrite: def.layer === 'background' }));
@@ -579,8 +595,10 @@ const cels = CEL_DEFS.map((def) => {
   mesh.receiveShadow = true;
   mesh.userData = { cel: true, props, holes: holes || CEL_HOLES, state: 'rest', homePos: mesh.position.clone(), homeQuat: mesh.quaternion.clone() };
   scene.add(mesh);
+  cels.push(mesh);
   return mesh;
-});
+}
+CEL_DEFS.forEach(spawnCel);
 
 const Examine = { active: false, cel: null, target: null, rotX: 0, rotY: 0, startedAt: 0, sawBack: false };
 const raycaster = new THREE.Raycaster();
@@ -684,9 +702,13 @@ logEvent('world', 'cels placed', CEL_DEFS.map((d) => d.id));
 // Satchel.items; capacity upgrades just raise Satchel.capacity.
 const SATCHEL_CAPACITY = 4;
 const Satchel = { capacity: SATCHEL_CAPACITY, items: [], selected: 0, hudOpen: false, flashUntil: 0 };
-// Desk: an exposure sheet of frame slots (filled in section 13), each a layer
-// stack bottom -> top. `layers` is always the active frame's stack.
-const Desk = { slots: [], active: 0, get layers() { return this.slots[this.active]; }, target: false, targetCel: null };
+// Desk: `slots` is the exposure sheet of whichever Scene Library folder is
+// open (section 13), each slot a layer stack bottom -> top; `layers` is the
+// active frame's stack. With no folder open it's an empty sheet.
+const Desk = {
+  get slots() { return Library.open ? Library.open.slots : EMPTY_SHEET; },
+  active: 0, get layers() { return this.slots[this.active]; }, target: false, targetCel: null,
+};
 const REG = { x: DESK.x, z: DESK.z - 0.02 };   // registration point (cel centre) on the lightbox
 const LAYER_ORDER = { background: 0, character: 1, effects: 2 };
 const satchelEl = document.getElementById('satchel');
@@ -854,7 +876,8 @@ setFlag('deskLayers', '(empty)');
 renderSatchelHud();
 
 // =====================================================================
-// 13. COMPOSITING — desk, registration, exposure sheet, playback, reels
+// 13. COMPOSITING — desk, scene library, registration, sheets, playback,
+//     reels on exit, and cel sourcing (shipment crate + matched lots)
 // =====================================================================
 // Sitting down: [E] at the desk. The camera glides to a top-down view of the
 // lightbox, carried cels are laid on the desk margins (the tray) and the
@@ -868,8 +891,14 @@ renderSatchelHud();
 // registerCel() is where a "won't register" failure can go later. For now
 // registration always succeeds.
 //
-// Exposure sheet: FRAME_SLOTS frames in a row along the front of the
-// lightbox, each its own stack (background / character / effects). The
+// Scene Library: one folder per sceneId the player has placed a cel into,
+// shown as folder cards along the back of the lightbox ("Sc 12  2/4").
+// Each folder owns an independent exposure sheet. Placing a cel files it
+// by its sceneId: into that scene's folder (created on first use), which
+// opens. Click a card or [Up]/[Down] to open another folder.
+//
+// Exposure sheet (per folder): FRAME_SLOTS frames in a row along the front of
+// the lightbox, each its own stack (background / character / effects). The
 // active frame sits on the pegs at full size; the rest wait as thumbnails.
 // [<] [>] (or arrow keys, or clicking a thumbnail) changes the active frame.
 // Carrying a registered cel to another frame (switch while holding it, or
@@ -883,26 +912,36 @@ renderSatchelHud();
 // mismatch; neighbouring filled frames that disagree are only logged
 // ("continuity"), never shown in-world.
 //
-// Reels: no confirm step. When at least REEL_MIN_FRAMES frames each hold a
-// background and the player stops touching the sheet for a moment, the reel
-// goes live once, with a single audio cue (DESIGN.md §2, step 5).
+// Reels: no confirm step and no slot-count rule. Standing up from the desk
+// completes every folder that has at least one filled frame: its sheet is
+// snapshotted as a finished reel (log, reelsCompleted, resonance per cel,
+// audio cue, plus a TEMPORARY "REEL COMPLETE" debug banner), then the
+// folder is cleared and its cels are consumed (gone, not back to the
+// satchel). Empty folders complete nothing.
+//
+// Sourcing: the east crate stack in the desk area is the shipment crate.
+// Whenever it's been empty for SOURCING.restockDelay seconds a shipment
+// arrives on it: usually one random cel, occasionally (tune.lotChance) a
+// matched lot of 2-4 consecutive character cuts from one scene, tagged with
+// a lotId. With the debug overlay open: [ / ] tune lotChance, N forces a
+// shipment.
 const FRAME_SLOTS = 4;       // exposure-sheet length (3-5)
 const FLIP_FPS = 4;          // playback rate, frames per second
-const REEL_MIN_FRAMES = 2;   // frames with a background needed for a complete reel
 const COMPOSE = {
   handSpeed: 0.0011,   // metres of hand travel per pixel of mouse movement
   follow: 16,          // how tightly a held cel trails the hand (higher = snappier)
   lift: 0.05,          // how high a held cel floats above the desk
   magnet: 0.1,         // within this of its registered spot, a held cel is drawn in
   snap: 0.05,          // within this, letting go snaps it into register
-  settle: 1.5,         // seconds hands-off before a complete reel goes live
   camBlend: 5,         // sit-down / stand-up camera speed
 };
 const Compose = { active: false, t: 0, cursor: new THREE.Vector3(), held: null, vel: new THREE.Vector3() };
-const Reel = { completed: new Set(), pendingSig: '', idle: 0, pulse: 0, wasComplete: false };
+const Reel = { pulse: 0 };   // lightbox glow after reels complete
 const Play = { active: false, seq: [], i: 0, t: 0 };
 const Continuity = { open: new Set() };   // mismatches currently on the sheet (already logged)
-for (let i = 0; i < FRAME_SLOTS; i++) Desk.slots.push([]);
+// Scene Library state (folder: { sceneId, label, slots, frame, card, canvas })
+const Library = { folders: [], open: null };
+const EMPTY_SHEET = Array.from({ length: FRAME_SLOTS }, () => []);   // shown when no folder is open; never filled
 
 // Seated camera: above the lightbox, tilted a little toward the chair side
 const deskCamPos = new THREE.Vector3(DESK.x, DESK.h + 1.12, DESK.z + 0.28);
@@ -989,6 +1028,18 @@ function refreshStatic() {
 // the active frame registered on the pegs, the others as thumbnails.
 // Cels glide there in updateCompose(); teleport=true jumps (playback).
 function layoutDesk(teleport) {
+  Library.folders.forEach((f, fi) => {   // only the open folder's cels are out on the desk
+    for (const cel of f.slots.flat()) {
+      if (Compose.held && Compose.held.cel === cel) continue;
+      if (f !== Library.open && cel.parent) scene.remove(cel);
+      else if (f === Library.open && !cel.parent) {   // slides out of its folder card
+        const p = folderCardPos(fi);
+        scene.add(cel);
+        cel.position.set(p.x, DESK.h + 0.03, p.z);
+        cel.scale.setScalar(0.2);
+      }
+    }
+  });
   Desk.slots.forEach((layers, s) => {
     layers.sort((a, b) => LAYER_ORDER[a.userData.props.layer] - LAYER_ORDER[b.userData.props.layer]);
     layers.forEach((cel, i) => {
@@ -1008,14 +1059,79 @@ function layoutDesk(teleport) {
       }
     });
   });
-  markers.forEach((m, s) => m.material.color.setHex(s === Desk.active ? 0xffc86b : 0x8a857c));
+  markers.forEach((m, s) => m.material.color.setHex(!Library.open ? 0x5a5650 : s === Desk.active ? 0xffc86b : 0x8a857c));
 }
-const frameSummary = () => Desk.slots.map((l, s) => `${s + 1}:${l.map(idOf).join('+') || '-'}`).join('  ');
+const frameSummary = () => (Library.open
+  ? `${Library.open.sceneId} ` + Desk.slots.map((l, s) => `${s + 1}:${l.map(idOf).join('+') || '-'}`).join('  ')
+  : '(no folder open)');
+const filledCount = (f) => f.slots.filter((l) => l.length).length;
 
 // Called on every desk change (via satchelChanged, or frame-to-frame moves)
 function deskChanged() {
   setFlag('deskLayers', frameSummary());
+  setFlag('library', Library.folders.map((f) => `${f.sceneId}:${filledCount(f)}/${FRAME_SLOTS}`).join('  ') || '(empty)');
+  layoutFolderCards();
   checkContinuity();
+}
+
+// --- Scene Library: folder cards along the back edge of the lightbox
+const FOLDER = { w: 0.13, h: 0.085, pitch: 0.15, z: DESK.z - 0.29 };
+const folderCardPos = (i) => ({ x: DESK.x + (i - (Library.folders.length - 1) / 2) * FOLDER.pitch, z: FOLDER.z });
+const folderFor = (sceneId) => Library.folders.find((f) => f.sceneId === sceneId);
+function drawFolderCard(f) {
+  const g = f.canvas.getContext('2d'), open = f === Library.open;
+  g.clearRect(0, 0, 130, 85);
+  g.fillStyle = open ? '#f0cf7a' : '#c9a86a';
+  g.fillRect(6, 0, 46, 14);     // tab
+  g.fillRect(0, 10, 130, 75);   // body
+  if (open) { g.strokeStyle = '#1e1d1b'; g.lineWidth = 5; g.strokeRect(2.5, 12.5, 125, 70); }
+  g.fillStyle = '#1e1d1b';
+  g.font = 'bold 24px monospace'; g.fillText(f.label, 10, 44);
+  g.font = '19px monospace'; g.fillText(`${filledCount(f)}/${FRAME_SLOTS}`, 10, 72);   // compact preview: frames filled
+  f.card.material.map.needsUpdate = true;
+}
+function layoutFolderCards() {
+  Library.folders.forEach((f, i) => {
+    const p = folderCardPos(i);
+    f.card.position.set(p.x, DESK.h + 0.0205, p.z);
+    drawFolderCard(f);
+  });
+}
+function createFolder(sceneId, sceneNumber) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 130; canvas.height = 85;
+  const card = new THREE.Mesh(new THREE.PlaneGeometry(FOLDER.w, FOLDER.h),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true, depthWrite: false }));
+  card.quaternion.copy(FLAT);
+  card.renderOrder = 8;
+  card.raycast = () => {};
+  scene.add(card);
+  const f = { sceneId, label: `Sc ${sceneNumber}`, slots: Array.from({ length: FRAME_SLOTS }, () => []), frame: 0, card, canvas };
+  Library.folders.push(f);
+  layoutFolderCards();
+  setFlag('library.folders', Library.folders.length);
+  logEvent('library', `folder created: ${sceneId}`, { sceneId, folder: f.label, folderCount: Library.folders.length });
+  return f;
+}
+// keepFrame: stay on the current frame number (used when a placement opens a folder)
+function openFolder(f, keepFrame) {
+  if (f === Library.open) return;
+  if (Play.active) stopPlay('folder change');
+  if (Library.open) Library.open.frame = Desk.active;
+  Library.open = f;
+  if (!keepFrame) Desk.active = f.frame;
+  layoutDesk(false);
+  deskChanged();
+  setFlag('library.open', f.sceneId);
+  setFlag('desk.frame', Desk.active + 1);
+}
+function stepFolder(d) {
+  if (Compose.held || !Library.folders.length) return;   // folders don't switch with a cel in hand
+  const n = Library.folders.length, i = Library.folders.indexOf(Library.open);
+  openFolder(Library.folders[i < 0 ? 0 : (i + d + n) % n]);
+}
+function folderUnderHand() {
+  return Library.folders.find((f) => Math.abs(Compose.cursor.x - f.card.position.x) < FOLDER.w / 2 && Math.abs(Compose.cursor.z - f.card.position.z) < FOLDER.h / 2);
 }
 
 // --- Continuity: log (never show) mismatches between neighbouring filled frames
@@ -1030,11 +1146,11 @@ function checkContinuity() {
     if (!a || !b) continue;   // only frames side by side that are both filled
     for (const field of ['scene', 'tone']) {
       if (a[field] === b[field]) continue;
-      const type = `${field}-mismatch`, key = `${type}|${s}|${a.cels}|${b.cels}`;
+      const type = `${field}-mismatch`, key = `${Library.open.sceneId}|${type}|${s}|${a.cels}|${b.cels}`;
       now.add(key);
       if (Continuity.open.has(key)) continue;   // still there from before: already logged
       incFlag('continuity.mismatchEvents');
-      logEvent('continuity', type, { frames: [s + 1, s + 2], [field]: [a[field], b[field]], cels: [a.cels, b.cels] });
+      logEvent('continuity', type, { folder: Library.open.sceneId, frames: [s + 1, s + 2], [field]: [a[field], b[field]], cels: [a.cels, b.cels] });
     }
   }
   Continuity.open = now;
@@ -1110,7 +1226,16 @@ function exitCompose(reason) {
   for (const cel of Satchel.items) { scene.remove(cel); cel.scale.setScalar(1); }   // tray cels back into the satchel
   handCursor.visible = false;
   setFlag('desk.seated', false);
-  logEvent('desk', 'stood up', { reason, frames: frameSummary() });
+  logEvent('desk', 'stood up', { reason, library: getFlag('library') });
+  // Leaving the desk completes every folder with something on its sheet
+  const done = Library.folders.map(completeFolder).filter(Boolean);
+  if (done.length) {
+    done.forEach((d, i) => setTimeout(playReelCue, i * 900));
+    Reel.pulse = 1;
+    showReelBanner(done);
+    layoutDesk(false);
+    deskChanged();
+  }
 }
 
 // --- Frames and playback
@@ -1164,7 +1289,6 @@ function grab(cel) {
     offset: new THREE.Vector3(cel.position.x - Compose.cursor.x, 0, cel.position.z - Compose.cursor.z),   // no jump on pickup
   };
   cel.renderOrder = 50;
-  Reel.idle = 0;
 }
 // Where the hand is taking the held cel: hand + grab offset, drawn toward its
 // registered spot when close. Snapping is judged on this aim rather than the
@@ -1192,6 +1316,11 @@ function releaseHeld() {
   Compose.held = null;
   pegMat.emissive.setHex(0x000000);
   if (inRegister) {
+    // File by scene: the cel goes to its sceneId's folder (new if needed), which opens
+    const { sceneId, scene: sceneNumber } = cel.userData.props;
+    const created = !folderFor(sceneId);
+    const folder = folderFor(sceneId) || createFolder(sceneId, sceneNumber);
+    openFolder(folder, true);
     if (from === 'tray') {
       placeOnDesk(cel);
       layoutTray(false);
@@ -1203,12 +1332,13 @@ function releaseHeld() {
       layoutDesk(false);
       deskChanged();
       registerCel(cel, Desk.active, { movedFrom: fromFrame + 1 });
-    } else layoutDesk(false);
+    } else { layoutDesk(false); playTick(); return; }   // re-seated where it was: not a new placement
+    logEvent('library', `placed ${idOf(cel)} in ${sceneId}`,
+      { id: idOf(cel), sceneId, folder: folder.label, frame: Desk.active + 1, newFolder: created, movedFrom: from === 'desk' ? fromFrame + 1 : undefined });
     playTick();
   } else if (from === 'desk') {
     if (takeFromDesk(cel)) layoutTray(false);   // full satchel: it glides back onto the pegs
   } else layoutTray(false);
-  Reel.idle = 0;
 }
 
 document.addEventListener('keydown', (e) => {
@@ -1219,6 +1349,8 @@ document.addEventListener('keydown', (e) => {
   } else if (e.code === 'KeyE' || e.code === 'Escape') exitCompose('key');
   else if (e.code === 'ArrowLeft' || e.code === 'Comma') selectFrame(Desk.active - 1);
   else if (e.code === 'ArrowRight' || e.code === 'Period') selectFrame(Desk.active + 1);
+  else if (e.code === 'ArrowUp') stepFolder(-1);
+  else if (e.code === 'ArrowDown') stepFolder(1);
   else if (e.code === 'Space') (Play.active ? stopPlay('key') : startPlay());
 });
 document.addEventListener('pointerlockchange', () => { if (!locked && Compose.active) exitCompose('pointer released'); });
@@ -1232,40 +1364,143 @@ document.addEventListener('mousedown', (e) => {
   if (!locked || !Compose.active || e.button !== 0 || Compose.t < 0.6) return;   // ignore clicks mid sit-down
   if (Play.active) { stopPlay('click'); return; }
   if (Compose.held) { releaseHeld(); return; }
-  const cel = celUnderHand();
+  const cel = celUnderHand(), folder = folderUnderHand();
   if (cel) grab(cel);
   else if (markerUnderHand() >= 0) selectFrame(markerUnderHand());
+  else if (folder) openFolder(folder);
 });
 
-// --- Reel: complete = REEL_MIN_FRAMES frames with a background; goes live once, hands-off
-function goLive(sig) {
-  Reel.completed.add(sig);
-  Reel.wasComplete = true;
+// --- Reel completion: on leaving the desk, per folder with anything on it
+const celMetaObj = (c) => { const p = c.userData.props; return { id: p.id, cut: p.cut, layer: p.layer, sceneId: p.sceneId, tone: p.tone, lotId: p.lotId }; };
+function completeFolder(f) {
+  const used = f.slots.flat();
+  if (!used.length) return null;   // empty sheet: nothing to file, no blank reel
   incFlag('reelsCompleted');
-  setFlag('lastReel', sig);
-  const frames = Desk.slots.map((layers, s) => ({
-    frame: s + 1,
-    layers: layers.map((c) => { const p = c.userData.props; return { id: p.id, cut: p.cut, layer: p.layer, scene: p.scene, tone: p.tone }; }),
-  }));
-  logEvent('reel', `reel live #${getFlag('reelsCompleted')}`, {
-    filledFrames: frames.filter((f) => f.layers.length).map((f) => f.frame),
-    blankFrames: frames.filter((f) => !f.layers.length).map((f) => f.frame),
-    frames, signature: sig,
+  const n = getFlag('reelsCompleted');
+  const frames = f.slots.map((layers, s) => ({ frame: s + 1, layers: layers.map(celMetaObj) }));
+  const filledFrames = frames.filter((fr) => fr.layers.length).map((fr) => fr.frame);
+  setFlag('lastReel', `#${n} ${f.sceneId} ` + frames.map((fr) => `${fr.frame}:${fr.layers.map((l) => l.id).join('+') || '-'}`).join('  '));
+  logEvent('reel', `reel #${n} complete: ${f.sceneId}`, {
+    folder: f.sceneId, filledFrames, blankFrames: frames.filter((fr) => !fr.layers.length).map((fr) => fr.frame),
+    frames, cels: used.map(idOf), lots: [...new Set(used.map((c) => c.userData.props.lotId).filter(Boolean))],
   });
-  applyResonance();   // section 15
-  playReelCue();
-  Reel.pulse = 1;
+  applyResonance(used);   // section 15: +1 per cel's tag
+  f.slots.forEach((l) => { l.length = 0; });
+  used.forEach(consumeCel);
+  return { n, sceneId: f.sceneId, filled: filledFrames.length };
+}
+function consumeCel(cel) {   // a cel used in a finished reel leaves the game
+  scene.remove(cel);
+  cel.userData.state = 'consumed';
+  cels.splice(cels.indexOf(cel), 1);
+  if (cel.material.map) cel.material.map.dispose();
 }
 function updateReel(dt) {
-  const sig = frameSummary();
-  if (sig !== Reel.pendingSig) { Reel.pendingSig = sig; Reel.idle = 0; }
-  const withBackground = Desk.slots.filter((l) => l.some((c) => c.userData.props.layer === 'background')).length;
-  if (withBackground < REEL_MIN_FRAMES) { Reel.wasComplete = false; Reel.idle = 0; }   // broken: a later completion counts again
-  else if (Reel.wasComplete || Compose.held || Reel.completed.has(sig)) Reel.idle = 0;   // only on first reaching complete
-  else if ((Reel.idle += dt) >= COMPOSE.settle) goLive(sig);
   Reel.pulse = Math.max(0, Reel.pulse - dt * 0.7);   // lightbox swells, then fades back
   lightbox.material.emissive.setHex(0x5a5448).lerp(PULSE_COLOR, Reel.pulse);
 }
+
+// TEMPORARY test cue: an unmistakable banner on reel completion. The design
+// calls for the audio cue alone; switch this off once the loop is proven.
+const DEBUG_REEL_BANNER = true;
+const reelBannerEl = document.getElementById('reelbanner');
+let reelBannerTimer = 0;
+function showReelBanner(done) {
+  if (!DEBUG_REEL_BANNER) return;
+  reelBannerEl.innerHTML = 'REEL COMPLETE<small>' +
+    done.map((d) => `#${d.n} ${d.sceneId} · ${d.filled} frame${d.filled === 1 ? '' : 's'}`).join('<br>') + '</small>';
+  reelBannerEl.classList.add('show');
+  clearTimeout(reelBannerTimer);
+  reelBannerTimer = setTimeout(() => reelBannerEl.classList.remove('show'), 3000);
+}
+
+// --- Sourcing: the shipment crate (east crate stack, desk area)
+const SOURCING = {
+  lotChance: 0.1,      // starting chance a shipment is a matched lot (live value: flag tune.lotChance)
+  restockDelay: 10,    // seconds the crate must sit empty before the next shipment
+  lotSize: [2, 4],     // matched lot size range (inclusive)
+  scenes: ['12', '14', '31', '40'],
+};
+const SHIP_TOP = new THREE.Vector3(5.4, 1.405, -13.2);   // top of the east crate stack
+const CRATE_SLOTS = [[-0.17, -0.14], [0.17, -0.14], [-0.17, 0.14], [0.17, 0.14]];
+const GEN = {
+  layers: ['background', 'background', 'character', 'character', 'effects'],   // single-draw weighting
+  palettes: {
+    background: [['#cfe3f0', '#2f5d8a'], ['#f4dcc0', '#8a3b2a'], ['#d6e4ec', '#24506e'], ['#e6efd8', '#4a6b3a']],
+    character: [['#f3eee2', '#e76f51'], ['#e8e4f4', '#3a5a8a'], ['#f6e3e8', '#9a3b5a']],
+    effects: [['#d9ecc8', '#6a4c93'], ['#fff1cc', '#b8862a']],
+  },
+  motifs: { background: ['hills', 'city', 'sea'], character: ['bust', 'figure'], effects: ['burst'] },
+  origins: ['stamped: Studio Hoshino', 'no stamp', 'handwritten: "H-G"', 'stamp illegible', 'pencil: "retake"'],
+};
+const Shipment = { wait: Infinity, count: 0, lots: 0, serial: 0 };   // wait = Infinity: first shipment arrives at once
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+const nextCelId = () => `cel-s${String(++Shipment.serial).padStart(2, '0')}`;
+
+function genCelDef(over = {}) {   // the common case: one unrelated cel
+  const layer = over.layer || pick(GEN.layers);
+  const [paper, ink] = pick(GEN.palettes[layer]);
+  return {
+    id: nextCelId(), resonance: pick(['care', 'violence']), cut: `C-${100 + Math.floor(Math.random() * 900)}`,
+    scene: pick(SOURCING.scenes), tone: pick(['warm', 'cool']), layer, motif: pick(GEN.motifs[layer]),
+    condition: +(0.3 + Math.random() * 0.6).toFixed(2), origin: pick(GEN.origins), paper, ink, ...over,
+  };
+}
+// The rare draw: 2-4 consecutive cuts of one character from one scene. Same
+// drawing, palette, tone and tag throughout; only the cut number and pose
+// (dx) advance, so they flip as motion on a sheet.
+function genMatchedLot() {
+  const lotId = `lot-${String(++Shipment.lots).padStart(2, '0')}`;
+  const [lo, hi] = SOURCING.lotSize, n = lo + Math.floor(Math.random() * (hi - lo + 1));
+  const base = genCelDef({ layer: 'character' }), first = 100 + Math.floor(Math.random() * 890);
+  return Array.from({ length: n }, (_, i) => ({
+    ...base, id: i === 0 ? base.id : nextCelId(), cut: `C-${first + i}`, lotId, lotIndex: i + 1, dx: (i - (n - 1) / 2) * 16,
+  }));
+}
+function crateOccupied() {   // anything from a shipment still sitting on (or being examined off) the crate
+  return cels.some((c) => c.userData.props.shipment && ['rest', 'held', 'returning'].includes(c.userData.state) &&
+    c.userData.homePos.distanceTo(SHIP_TOP) < 0.6);
+}
+function deliverShipment(reason) {
+  Shipment.wait = 0;
+  const n = ++Shipment.count, chance = getFlag('tune.lotChance', SOURCING.lotChance);
+  const isLot = Math.random() < chance;
+  const defs = isLot ? genMatchedLot() : [genCelDef()];
+  defs.forEach((def, i) => {
+    const [ox, oz] = CRATE_SLOTS[i];
+    Object.assign(def, { foundAt: 'shipment crate', shipment: n,
+      place: { x: SHIP_TOP.x + ox, y: SHIP_TOP.y, z: SHIP_TOP.z + oz, rx: -Math.PI / 2, ry: 0 } });
+    CEL_DEFS.push(def);
+    spawnCel(def);
+  });
+  setFlag('shipments.delivered', n);
+  const sceneId = sceneIdOf(defs[0].scene);
+  if (isLot) {
+    incFlag('lots.delivered');
+    logEvent('lot', `matched lot ${defs[0].lotId}: ${defs.length} consecutive cuts of ${sceneId}`, {
+      lotId: defs[0].lotId, sceneId, layer: 'character', cuts: defs.map((d) => d.cut), ids: defs.map((d) => d.id), shipment: n, lotChance: chance, reason,
+    });
+  } else {
+    logEvent('shipment', `shipment #${n}: ${defs[0].id} (${defs[0].layer}, ${sceneId})`, { id: defs[0].id, sceneId, layer: defs[0].layer, lotChance: chance, reason });
+  }
+}
+function updateShipments(dt) {
+  if (crateOccupied()) { Shipment.wait = 0; return; }
+  Shipment.wait += dt;
+  if (Shipment.wait >= SOURCING.restockDelay) deliverShipment('restock');
+}
+// Debug tuning, only while the dev overlay (`) is open
+DevLog.footer = 'TUNE  [ / ]  lotChance -/+ 0.05   ·   N  next shipment now';
+document.addEventListener('keydown', (e) => {
+  if (!DevLog.visible || e.repeat) return;
+  if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
+    const v = Math.round(Math.max(0, Math.min(1, getFlag('tune.lotChance', SOURCING.lotChance) + (e.code === 'BracketRight' ? 0.05 : -0.05))) * 100) / 100;
+    if (setFlag('tune.lotChance', v) !== v) logEvent('tune', `lotChance = ${v}`);   // only real changes
+  } else if (e.code === 'KeyN') {
+    if (crateOccupied()) logEvent('tune', 'crate still has cels on it; take them first');
+    else deliverShipment('forced');
+  }
+});
 
 // --- Per frame (runs seated or not: desk cels glide home, playback, reels, camera)
 function updateCompose(dt) {
@@ -1299,6 +1534,7 @@ function updateCompose(dt) {
     } else if (staticCard.visible) refreshStatic();
   }
   updateReel(dt);
+  updateShipments(dt);
 
   // Camera: blend from the walking eye to the seated view and back
   Compose.t += ((Compose.active ? 1 : 0) - Compose.t) * (1 - Math.exp(-COMPOSE.camBlend * dt));
@@ -1312,7 +1548,7 @@ function updateCompose(dt) {
   handCursor.visible = Compose.active && Compose.t > 0.6 && !Play.active;
   if (handCursor.visible) {
     handCursor.position.set(Compose.cursor.x, DESK.h + 0.08, Compose.cursor.z);
-    const hover = celUnderHand() || markerUnderHand() >= 0;
+    const hover = celUnderHand() || markerUnderHand() >= 0 || folderUnderHand();
     handCursor.material.color.setHex(Compose.held ? 0xffc86b : hover ? 0xfff2c8 : 0xffffff);
     handCursor.scale.setScalar(Compose.held ? 1.4 : 1);
   }
@@ -1322,6 +1558,8 @@ setFlag('desk.seated', false);
 setFlag('desk.frame', 1);
 setFlag('desk.playing', false);
 setFlag('continuity.mismatchEvents', 0);
+setFlag('library.folders', 0);
+setFlag('tune.lotChance', SOURCING.lotChance);
 deskChanged();
 layoutDesk(true);
 
@@ -1333,7 +1571,7 @@ let lastHints = null;
 function updateKeyHints() {
   const n = Satchel.capacity;
   const h = !locked ? ''   // the click-to-walk screen lists everything
-    : Compose.active ? '<b>Mouse</b> hand · <b>Click</b> pick up / put down · <b>&lt; &gt;</b> or <b>← →</b> frame · <b>Space</b> play / stop · <b>E</b> stand up'
+    : Compose.active ? '<b>Mouse</b> hand · <b>Click</b> pick up / put down · <b>&lt; &gt;</b> or <b>← →</b> frame · <b>↑ ↓</b> folder · <b>Space</b> play · <b>E</b> stand up (files reels)'
     : Examine.active ? '<b>Mouse</b> turn · <b>E</b> put back · <b>F</b> take into satchel'
     : `<b>WASD</b> move · <b>E</b> examine / sit / talk · <b>Tab</b> satchel · <b>1-${n}</b> choose · <b>G</b> drop · <b>\`</b> debug`;
   if (h !== lastHints) { keysEl.innerHTML = h; lastHints = h; }
@@ -1347,10 +1585,13 @@ function updateInfoLine() {
   if (locked && Examine.active) t = celMeta(Examine.cel.userData.props);
   else if (locked && Compose.active) {
     const cel = (Compose.held && Compose.held.cel) || (!Play.active && celUnderHand());
-    const m = cel || Play.active ? -1 : markerUnderHand();
+    const folder = !cel && !Play.active && folderUnderHand();
+    const m = cel || folder || Play.active ? -1 : markerUnderHand();
     const s = m >= 0 ? m : Desk.active;
     t = cel ? `${celMeta(cel.userData.props)} · ${cel.userData.props.layer}`
-      : `${Play.active ? '▶ ' : ''}Frame ${s + 1} of ${FRAME_SLOTS}: ${Desk.slots[s].map((c) => c.userData.props.cut).join(' + ') || 'empty'}`;
+      : folder ? `Folder ${folder.label}: ${filledCount(folder)} of ${FRAME_SLOTS} frames filled`
+      : !Library.open ? 'No folder open · place a cel on the pegs to start one'
+      : `${Play.active ? '▶ ' : ''}${Library.open.label} · Frame ${s + 1} of ${FRAME_SLOTS}: ${Desk.slots[s].map((c) => c.userData.props.cut).join(' + ') || 'empty'}`;
   }
   if (metaEl.textContent !== t) metaEl.textContent = t;
 }
@@ -1359,8 +1600,8 @@ function updateInfoLine() {
 // 15. RESONANCE & NPC — compose -> delayed, unannounced NPC reaction
 // =====================================================================
 // Slice version of DESIGN.md §4.4: two tags only, Care and Violence (a
-// tension pair). Each cel carries one (CEL_DEFS.resonance). When a reel goes
-// live, every tag present anywhere on the sheet gets +1. Opposed tags don't
+// tension pair). Each cel carries one (CEL_DEFS.resonance). When a reel
+// completes, each cel in it adds +1 to its own tag. Opposed tags don't
 // cancel: a reel with both bumps both.
 //
 // One NPC, "the regular", stands in the plaza. Once either counter reaches
@@ -1372,11 +1613,16 @@ const RESONANCE_TAGS = ['care', 'violence'];
 const RESONANCE_THRESHOLD = 2;
 RESONANCE_TAGS.forEach((t) => setFlag(`resonance:${t}`, 0));
 
-function applyResonance() {
-  const tags = RESONANCE_TAGS.filter((t) => Desk.slots.some((layers) => layers.some((c) => c.userData.props.resonance === t)));
-  tags.forEach((t) => incFlag(`resonance:${t}`));
+function applyResonance(used) {
+  const inc = {};
+  for (const c of used) {
+    const t = c.userData.props.resonance;
+    if (RESONANCE_TAGS.includes(t)) inc[t] = (inc[t] || 0) + 1;
+  }
+  Object.entries(inc).forEach(([t, n]) => incFlag(`resonance:${t}`, n));
   const totals = Object.fromEntries(RESONANCE_TAGS.map((t) => [t, getFlag(`resonance:${t}`)]));
-  logEvent('resonance', tags.length ? tags.map((t) => `+1 ${t}`).join(', ') : 'no tags', { incremented: tags, totals, reel: getFlag('reelsCompleted') });
+  logEvent('resonance', Object.entries(inc).map(([t, n]) => `+${n} ${t}`).join(', ') || 'no tags',
+    { incremented: inc, cels: used.map(idOf), totals, reel: getFlag('reelsCompleted') });
   checkNpcShift();
 }
 
